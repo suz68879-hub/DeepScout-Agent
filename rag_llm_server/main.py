@@ -18,6 +18,7 @@ from api import reports as reports_api
 from api import resume as resume_api
 from api import rtc as rtc_api
 from config import settings
+from db import close_database, init_database
 from logging_config import configure_logging
 from middleware.request_context import RequestContextMiddleware
 from services.interview_service import shutdown_cold_tasks
@@ -31,6 +32,7 @@ logger = logging.getLogger(__name__)
 async def lifespan(_app: FastAPI):
     await init_storage()
     try:
+        await init_database()
         if not settings.RTC_CALLBACK_SECRET:
             raise RuntimeError("RTC_CALLBACK_SECRET is required")
         await init_graph()
@@ -63,6 +65,7 @@ async def lifespan(_app: FastAPI):
         clear_rtc_locks()
         await close_graph()
         await close_storage()
+        await close_database()
 
 
 async def unhandled_exception_handler(request: Request, exc: Exception):
