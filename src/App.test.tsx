@@ -7,6 +7,7 @@ import App from './App';
 
 // 面试间页在 jsdom 下 mock RTC 链路与重型子组件（App 冒烟测试只验证路由可达）
 vi.mock('@/components/AiAvatarCard', () => ({ default: () => <div>avatar</div> }));
+vi.mock('@/pages/Interview', () => ({ default: () => <button>结束面试</button> }));
 vi.mock('@/pages/MainPage/MainArea/Room/CameraArea', () => ({ default: () => <div>camera</div> }));
 vi.mock('@/pages/MainPage/MainArea/Room/Conversation', () => ({ default: () => <div>subtitle</div> }));
 vi.mock('@/lib/useCommon', () => ({
