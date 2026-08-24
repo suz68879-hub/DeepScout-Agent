@@ -27,8 +27,11 @@ junit-*.xml
 # production
 /build
 
-# local documentation (tracked historical docs are excluded from this commit separately)
-/docs/
+# local documentation (only enterprise evolution plans/evidence are audited in Git)
+/docs/*
+!/docs/企业级架构演进设计.md
+!/docs/enterprise-evolution/
+!/docs/enterprise-evolution/**
 
 # misc
 .DS_Store
