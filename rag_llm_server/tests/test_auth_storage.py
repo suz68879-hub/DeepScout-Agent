@@ -1,5 +1,6 @@
 import hashlib
 import sqlite3
+from contextlib import closing
 
 import pytest
 
@@ -43,7 +44,7 @@ async def test_auth_session_stores_only_token_digest(tmp_path):
 @pytest.mark.asyncio
 async def test_legacy_rows_are_assigned_to_bootstrap_admin(tmp_path, monkeypatch):
     db_path = tmp_path / "legacy.db"
-    with sqlite3.connect(db_path) as conn:
+    with closing(sqlite3.connect(db_path)) as conn:
         conn.execute(
             "CREATE TABLE resume (id TEXT PRIMARY KEY, content TEXT, structured_json TEXT, "
             "source TEXT, status TEXT, created_at TEXT, updated_at TEXT)"
@@ -51,6 +52,7 @@ async def test_legacy_rows_are_assigned_to_bootstrap_admin(tmp_path, monkeypatch
         conn.execute(
             "INSERT INTO resume VALUES ('legacy-resume', 'legacy', NULL, 'md', 'ready', 'now', 'now')"
         )
+        conn.commit()
 
     monkeypatch.setattr(settings, "BOOTSTRAP_ADMIN_USERNAME", "Owner.Admin")
     monkeypatch.setattr(settings, "BOOTSTRAP_ADMIN_PASSWORD", "password-123")
@@ -62,7 +64,7 @@ async def test_legacy_rows_are_assigned_to_bootstrap_admin(tmp_path, monkeypatch
     assert admin["role"] == "admin"
     assert (await storage.resume_get(admin["id"], "legacy-resume"))["content"] == "legacy"
     assert await storage.resume_get("someone-else", "legacy-resume") is None
-    with sqlite3.connect(db_path) as conn:
+    with closing(sqlite3.connect(db_path)) as conn:
         assert conn.execute("PRAGMA user_version").fetchone()[0] >= 2
     await storage.close()
 
@@ -70,7 +72,7 @@ async def test_legacy_rows_are_assigned_to_bootstrap_admin(tmp_path, monkeypatch
 @pytest.mark.asyncio
 async def test_legacy_migration_requires_bootstrap_credentials(tmp_path, monkeypatch):
     db_path = tmp_path / "legacy.db"
-    with sqlite3.connect(db_path) as conn:
+    with closing(sqlite3.connect(db_path)) as conn:
         conn.execute(
             "CREATE TABLE resume (id TEXT PRIMARY KEY, content TEXT, structured_json TEXT, "
             "source TEXT, status TEXT, created_at TEXT, updated_at TEXT)"
@@ -78,6 +80,7 @@ async def test_legacy_migration_requires_bootstrap_credentials(tmp_path, monkeyp
         conn.execute(
             "INSERT INTO resume VALUES ('legacy-resume', 'legacy', NULL, 'md', 'ready', 'now', 'now')"
         )
+        conn.commit()
 
     monkeypatch.setattr(settings, "BOOTSTRAP_ADMIN_USERNAME", None)
     monkeypatch.setattr(settings, "BOOTSTRAP_ADMIN_PASSWORD", None)
@@ -90,7 +93,7 @@ async def test_legacy_migration_requires_bootstrap_credentials(tmp_path, monkeyp
 @pytest.mark.asyncio
 async def test_legacy_migration_rejects_broken_ownership_links(tmp_path, monkeypatch):
     db_path = tmp_path / "broken.db"
-    with sqlite3.connect(db_path) as conn:
+    with closing(sqlite3.connect(db_path)) as conn:
         conn.execute(
             "CREATE TABLE interview_session (id TEXT PRIMARY KEY, resume_id TEXT, position TEXT, "
             "stage TEXT, status TEXT, started_at TEXT, ended_at TEXT)"
@@ -99,6 +102,7 @@ async def test_legacy_migration_rejects_broken_ownership_links(tmp_path, monkeyp
             "INSERT INTO interview_session VALUES "
             "('session-1', 'missing-resume', 'Java', 'intro', 'running', 'now', NULL)"
         )
+        conn.commit()
 
     monkeypatch.setattr(settings, "BOOTSTRAP_ADMIN_USERNAME", "owner-admin")
     monkeypatch.setattr(settings, "BOOTSTRAP_ADMIN_PASSWORD", "password-123")
