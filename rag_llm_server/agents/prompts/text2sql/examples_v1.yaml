@@ -1,0 +1,14 @@
+version: 1.0.0
+examples:
+  - question: 我一共面试了多少次
+    sql: SELECT COUNT(*) AS total FROM interview_session WHERE status = 'finished';
+    explanation: 统计已完成面试的会话数量
+    chart_type: table
+  - question: 最近 5 次面试的平均分走势
+    sql: SELECT session_id, scores_json, created_at FROM interview_report ORDER BY created_at DESC LIMIT 5;
+    explanation: 取出最近 5 份报告的评分 JSON，由应用层解析后绘制趋势
+    chart_type: line
+  - question: 我提交过几份简历
+    sql: SELECT COUNT(*) AS total FROM resume;
+    explanation: 统计简历总数
+    chart_type: table

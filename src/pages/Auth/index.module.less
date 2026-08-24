@@ -1,0 +1,63 @@
+@import '@/styles/tokens.less';
+
+.page {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: @space-6;
+}
+
+.card {
+  width: min(100%, 420px);
+  padding: @space-8;
+  border: 1px solid @color-border;
+  border-radius: @radius-lg;
+  background: @color-bg-elevated;
+  box-shadow: @shadow-card;
+}
+
+.brand {
+  width: 48px;
+  height: 48px;
+  display: grid;
+  place-items: center;
+  border-radius: @radius-md;
+  background: @color-accent;
+  color: #fff;
+  font-weight: 700;
+}
+
+.card h1 { margin: @space-6 0 @space-2; color: @color-text-primary; }
+.card p { margin: 0 0 @space-6; color: @color-text-secondary; }
+
+.form { display: grid; gap: @space-3; }
+.form label { color: @color-text-primary; font-weight: 600; }
+.form input {
+  width: 100%;
+  padding: @space-3;
+  border: 1px solid @color-border;
+  border-radius: @radius-sm;
+  background: @color-bg-inset;
+  color: @color-text-primary;
+}
+.form input:focus { outline: 2px solid @color-accent; outline-offset: 2px; }
+.form button {
+  margin-top: @space-3;
+  padding: @space-3 @space-4;
+  border: 0;
+  border-radius: @radius-sm;
+  background: @color-accent;
+  color: #fff;
+  font-weight: 700;
+  cursor: pointer;
+}
+.form button:disabled { opacity: 0.6; cursor: wait; }
+.hint { color: @color-text-secondary; font-size: 12px; }
+.error { color: @color-danger; font-size: 14px; }
+.switch { margin-top: @space-6; color: @color-text-secondary; }
+.switch a { margin-left: @space-2; color: @color-accent; }
+
+@media (max-width: 480px) {
+  .page { padding: @space-4; }
+  .card { padding: @space-6; }
+}

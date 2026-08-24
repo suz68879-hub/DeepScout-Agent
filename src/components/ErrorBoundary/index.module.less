@@ -1,0 +1,33 @@
+@import '@/styles/tokens.less';
+
+.fallback {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: @space-4;
+  padding: @space-12;
+  font-family: @font-mono;
+}
+
+.code {
+  color: @color-danger;
+  font-size: 20px;
+}
+
+.message {
+  color: @color-text-secondary;
+}
+
+.reload {
+  font-family: @font-mono;
+  padding: @space-2 @space-4;
+  border: 1px solid @color-border;
+  border-radius: @radius-sm;
+  background: @color-bg-elevated;
+  color: @color-accent;
+  cursor: pointer;
+
+  &:hover {
+    border-color: @color-accent;
+  }
+}

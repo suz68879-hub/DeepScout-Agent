@@ -1,0 +1,54 @@
+@import '@/styles/tokens.less';
+
+.indicator {
+  display: flex;
+  gap: @space-2;
+  padding: 11px @space-6;
+  border-bottom: 1px solid #dbe2ea;
+  background: #f8fafc;
+  justify-content: center;
+}
+
+.step {
+  display: flex;
+  align-items: center;
+  gap: @space-2;
+  padding: 5px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  color: #64748b;
+}
+
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: @color-border;
+}
+
+.current {
+  background: #e8f0ff;
+  color: #155eef;
+  font-weight: 650;
+
+  .dot {
+    background: @color-accent;
+    box-shadow: 0 0 0 4px fade(@color-accent, 14%);
+  }
+}
+
+@media (max-width: 640px) {
+  .indicator { overflow-x: auto; justify-content: flex-start; padding: @space-3 @space-4; }
+  .step { white-space: nowrap; }
+}
+
+.done {
+  color: #334155;
+
+  .dot {
+    background: @color-accent-dim;
+  }
+}
+
+.upcoming {
+}

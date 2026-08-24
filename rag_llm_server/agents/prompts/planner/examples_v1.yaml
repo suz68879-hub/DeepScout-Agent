@@ -1,0 +1,26 @@
+version: 1.0.0
+examples:
+  - position: Java后端
+    stage: deepdive
+    resume_hint: 项目：商城订单系统（Spring Boot + MySQL + Redis），3 年经验
+    asked: []
+    output:
+      question_text: "先聊聊你做过的商城订单系统吧，这个项目主要解决什么问题，你在里面负责哪些部分？"
+      stage: deepdive
+      topic: 项目背景与职责
+      difficulty: 1
+      reference_points: []
+      follow_up_hints: ["订单状态机设计", "与第三方支付对接的细节"]
+      reason: "考点匹配：deepdive 阶段先建立项目全貌，从背景与职责切入难度最低，为后续细节深挖做铺垫；尚未出过题，无重复风险"
+  - position: Java后端
+    stage: technical
+    resume_hint: 商城订单系统（Spring Boot + MySQL + Redis），3 年经验
+    asked: ["什么是事务隔离级别"]
+    output:
+      question_text: "在你的商城项目里，下单的时候是怎么防止超卖的？用了什么方案，为什么这么选？"
+      stage: technical
+      topic: 并发与库存一致性
+      difficulty: 2
+      reference_points: ["Redis 预扣库存", "数据库乐观锁", "幂等与最终一致性"]
+      follow_up_hints: ["Redis 预扣失败时的补偿方案", "为什么不用悲观锁"]
+      reason: "考点匹配：候选人简历含商城订单系统，已出题目覆盖事务基础，未覆盖高并发一致性场景；结合 Java 后端岗位考察并发控制能力，难度适中"

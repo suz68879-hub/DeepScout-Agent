@@ -1,0 +1,125 @@
+@import '@/styles/tokens.less';
+
+.page {
+  max-width: 1100px;
+  margin: 0 auto;
+}
+
+.title {
+  font-size: 28px;
+  margin: 0 0 @space-6;
+}
+
+.prompt {
+  color: @color-accent;
+}
+
+.queryRow {
+  display: flex;
+  gap: @space-3;
+  margin-bottom: @space-4;
+  padding: @space-6;
+  border: 1px solid @color-border;
+  border-radius: @radius-lg;
+  background: @color-bg-elevated;
+  box-shadow: @shadow-card;
+}
+
+.queryInput {
+  flex: 1;
+}
+
+.templates {
+  display: flex;
+  gap: @space-2;
+  flex-wrap: wrap;
+  margin-bottom: @space-6;
+}
+
+.templateBtn {
+  font-family: @font-mono;
+  font-size: 13px;
+  padding: @space-1 @space-3;
+  border: 1px solid @color-border;
+  border-radius: @radius-sm;
+  background: @color-bg-elevated;
+  color: @color-text-secondary;
+  cursor: pointer;
+  transition:
+    color @duration-fast @ease-out-expo,
+    border-color @duration-fast @ease-out-expo;
+
+  &:hover {
+    color: @color-accent;
+    border-color: @color-accent-dim;
+  }
+}
+
+.result {
+  border: 1px solid @color-border;
+  border-radius: @radius-lg;
+  background: @color-bg-elevated;
+  padding: @space-6;
+  box-shadow: @shadow-card;
+}
+
+.sqlBlock {
+  background: #f1f5f9;
+  border: 1px solid @color-border-faint;
+  border-radius: @radius-md;
+  padding: @space-3 @space-4;
+  margin-bottom: @space-4;
+
+  code {
+    font-family: @font-mono;
+    font-size: 12px;
+    color: @color-accent;
+    white-space: pre-wrap;
+    word-break: break-all;
+  }
+}
+
+@media (max-width: 640px) {
+  .queryRow { flex-direction: column; padding: @space-4; }
+  .result { padding: @space-4; overflow-x: auto; }
+}
+
+.sqlLabel {
+  font-family: @font-mono;
+  font-size: 12px;
+  color: @color-text-secondary;
+  margin-bottom: @space-2;
+}
+
+.explain {
+  font-size: 13px;
+  color: @color-text-secondary;
+  margin-bottom: @space-4;
+}
+
+.empty {
+  color: @color-text-secondary;
+  font-size: 13px;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+
+  th,
+  td {
+    border: 1px solid @color-border-faint;
+    padding: @space-2 @space-3;
+    text-align: left;
+    color: @color-text-primary;
+    max-width: 320px;
+    word-break: break-all;
+  }
+
+  th {
+    font-family: @font-mono;
+    color: @color-accent;
+    background: @color-bg-inset;
+  }
+}

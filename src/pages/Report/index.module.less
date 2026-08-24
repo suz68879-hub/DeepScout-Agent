@@ -1,0 +1,247 @@
+@import '@/styles/tokens.less';
+
+.page {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: @space-6;
+}
+
+.header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  margin-bottom: @space-6;
+}
+
+.title {
+  font-size: 28px;
+  margin: 0 0 @space-2;
+}
+
+.prompt {
+  color: @color-accent;
+}
+
+.meta {
+  font-family: @font-mono;
+  font-size: 13px;
+  color: @color-text-secondary;
+}
+
+.exportBtn {
+  flex-shrink: 0;
+}
+
+.error {
+  max-width: 960px;
+  margin: @space-12 auto;
+  font-family: @font-mono;
+  color: @color-danger;
+}
+
+.errorCode {
+  display: block;
+  margin-bottom: @space-2;
+}
+
+.loading {
+  max-width: 960px;
+  margin: @space-6 auto;
+  padding: @space-6;
+}
+
+.overallCard {
+  border: 1px solid @color-border;
+  border-radius: @radius-lg;
+  background: @color-bg-elevated;
+  padding: @space-6;
+  margin-bottom: @space-6;
+  display: flex;
+  align-items: center;
+  gap: @space-6;
+  box-shadow: @shadow-card;
+  background: linear-gradient(135deg, #eff6ff, #ecfeff);
+}
+
+.overallLabel {
+  font-family: @font-mono;
+  font-size: 14px;
+  color: @color-text-secondary;
+}
+
+.overallValue {
+  font-family: @font-mono;
+  font-size: 44px;
+  color: @color-accent;
+  line-height: 1;
+}
+
+.overallUnit {
+  font-size: 16px;
+  color: @color-text-secondary;
+}
+
+.dimSummary {
+  display: flex;
+  gap: @space-2;
+  flex-wrap: wrap;
+}
+
+.dimChip {
+  font-family: @font-mono;
+  font-size: 12px;
+  padding: @space-1 @space-2;
+  border: 1px solid @color-border;
+  border-radius: @radius-sm;
+  color: @color-text-secondary;
+}
+
+.charts {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: @space-6;
+  margin-bottom: @space-6;
+}
+
+.chartCard {
+  border: 1px solid @color-border;
+  border-radius: @radius-lg;
+  background: @color-bg-elevated;
+  padding: @space-4;
+  box-shadow: @shadow-card;
+}
+
+.chartTitle {
+  font-family: @font-mono;
+  font-size: 13px;
+  color: @color-accent;
+  margin-bottom: @space-3;
+}
+
+.empty {
+  color: @color-text-secondary;
+  font-size: 13px;
+}
+
+.card {
+  border: 1px solid @color-border;
+  border-radius: @radius-lg;
+  background: @color-bg-elevated;
+  padding: @space-6;
+  margin-bottom: @space-6;
+  box-shadow: @shadow-card;
+}
+
+.cardTitle {
+  font-family: @font-mono;
+  font-size: 15px;
+  color: @color-accent;
+  margin-bottom: @space-4;
+}
+
+.summary {
+  color: @color-text-primary;
+  font-size: 14px;
+  line-height: 1.7;
+}
+
+.roundItem {
+  border: 1px solid @color-border-faint;
+  border-radius: @radius-md;
+  background: #f8fafc;
+  padding: @space-4;
+  margin-bottom: @space-3;
+}
+
+@media (max-width: 768px) {
+  .page { padding: @space-4; }
+  .header { gap: @space-4; }
+  .charts { grid-template-columns: 1fr; }
+  .overallCard { align-items: flex-start; flex-wrap: wrap; }
+  .dimSummary { width: 100%; }
+  .roundHead { align-items: flex-start; flex-wrap: wrap; }
+}
+
+.roundHead {
+  display: flex;
+  align-items: center;
+  gap: @space-3;
+  margin-bottom: @space-3;
+}
+
+.roundNo {
+  font-family: @font-mono;
+  color: @color-accent;
+}
+
+.roundQuestion {
+  flex: 1;
+  font-size: 14px;
+  color: @color-text-primary;
+}
+
+.roundScore {
+  font-family: @font-mono;
+  color: @color-success;
+}
+
+.roundBody {
+  font-size: 13px;
+  color: @color-text-secondary;
+  line-height: 1.7;
+}
+
+.roundKey {
+  font-family: @font-mono;
+  font-size: 12px;
+  color: @color-accent;
+  margin: @space-2 0 @space-1;
+}
+
+.suggestList {
+  margin: 0;
+  padding-left: 20px;
+  color: @color-text-primary;
+  font-size: 14px;
+  line-height: 1.9;
+}
+
+.transcriptDetails {
+  summary {
+    cursor: pointer;
+    font-family: @font-mono;
+    font-size: 13px;
+    color: @color-text-secondary;
+    list-style: none;
+    transition: color @duration-fast @ease-out-expo;
+
+    &:hover {
+      color: @color-accent;
+    }
+  }
+}
+
+.transcriptNote {
+  margin-top: @space-3;
+  font-size: 13px;
+  color: @color-warning;
+}
+
+.transcript {
+  margin-top: @space-4;
+  display: flex;
+  flex-direction: column;
+  gap: @space-2;
+}
+
+.transcriptLine {
+  font-size: 13px;
+  color: @color-text-primary;
+  line-height: 1.7;
+}
+
+.transcriptSpeaker {
+  font-family: @font-mono;
+  color: @color-accent;
+  margin-right: @space-2;
+}

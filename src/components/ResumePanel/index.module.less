@@ -1,0 +1,91 @@
+@import '@/styles/tokens.less';
+
+.card {
+  border: 1px solid @color-border;
+  border-radius: @radius-lg;
+  background: @color-bg-elevated;
+  padding: @space-6;
+  margin-bottom: @space-6;
+  box-shadow: @shadow-card;
+}
+
+.headerRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: @space-4;
+}
+
+.cardTitle {
+  font-size: 17px;
+  font-weight: 700;
+  color: @color-text-primary;
+}
+
+.channels {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: @space-4;
+  margin-bottom: @space-4;
+}
+
+.channel {
+  display: flex;
+  flex-direction: column;
+  gap: @space-2;
+  border: 1px dashed @color-border;
+  border-radius: @radius-md;
+  padding: @space-4;
+  background: @color-bg-inset;
+  transition: border-color @duration-fast @ease-out-expo, background @duration-fast @ease-out-expo;
+
+  &:hover { border-color: @color-accent; background: #f0f9ff; }
+}
+
+@media (max-width: 768px) {
+  .channels { grid-template-columns: 1fr; }
+}
+
+.channelName {
+  font-family: @font-mono;
+  font-size: 13px;
+  color: @color-text-secondary;
+}
+
+.textarea {
+  background: @color-bg-inset;
+  border: 1px solid @color-border;
+  border-radius: @radius-sm;
+  color: @color-text-primary;
+  font-family: @font-mono;
+  font-size: 12px;
+  padding: @space-2;
+  resize: vertical;
+}
+
+.preview {
+  border-top: 1px solid @color-border-faint;
+  padding-top: @space-4;
+  display: flex;
+  flex-direction: column;
+  gap: @space-2;
+  font-size: 13px;
+  color: @color-text-primary;
+}
+
+.previewRow {
+  display: flex;
+  gap: @space-3;
+  flex-wrap: wrap;
+}
+
+.previewKey {
+  color: @color-accent;
+  font-family: @font-mono;
+}
+
+.failedRow {
+  margin-top: @space-3;
+  color: @color-danger;
+  font-size: 13px;
+}
