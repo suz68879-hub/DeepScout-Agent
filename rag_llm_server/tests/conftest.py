@@ -18,13 +18,18 @@ import pytest
 
 
 @pytest.fixture
-def tmp_storage(tmp_path):
-    """SqliteStorage fixture（Task 2 落地后生效；此处先占位防 Task 1 测试报错）。"""
+async def tmp_storage(tmp_path):
+    """创建并在用例结束后统一关闭所有临时 SQLite Repository。"""
     from services.storage.sqlite import SqliteStorage  # Task 2 提供
+
+    instances = []
 
     async def _make():
         s = SqliteStorage(str(tmp_path / "test.db"))
         await s.init()
+        instances.append(s)
         return s
 
-    return _make
+    yield _make
+    for instance in reversed(instances):
+        await instance.close()
