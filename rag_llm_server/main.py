@@ -18,6 +18,7 @@ from api import reports as reports_api
 from api import resume as resume_api
 from api import rtc as rtc_api
 from config import settings
+from middleware.request_context import RequestContextMiddleware
 from services.interview_service import shutdown_cold_tasks
 from services.rtc_service import clear_rtc_locks
 from services.storage import close_storage, init_storage
@@ -100,6 +101,8 @@ def create_app() -> FastAPI:
         response.headers.setdefault("X-Frame-Options", "DENY")
         response.headers.setdefault("Referrer-Policy", "same-origin")
         return response
+
+    application.add_middleware(RequestContextMiddleware)
 
     application.add_exception_handler(Exception, unhandled_exception_handler)
     application.include_router(auth_api.router)
