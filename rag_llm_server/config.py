@@ -1,4 +1,6 @@
 import os
+from urllib.parse import unquote, urlsplit
+
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -36,6 +38,52 @@ def _csv_env(key: str, default: tuple[str, ...]) -> tuple[str, ...]:
         return default
     values = tuple(value.strip() for value in raw.split(",") if value.strip())
     return values or default
+
+
+def _int_env(key: str, default: int, minimum: int) -> int:
+    """读取有下界的整数环境变量，非法配置直接终止启动。"""
+    raw = os.getenv(key)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise ValueError(f"{key} must be an integer") from exc
+    if value < minimum:
+        raise ValueError(f"{key} must be at least {minimum}")
+    return value
+
+
+def _postgres_target(key: str, value: str, app_env: str) -> str:
+    """校验 PostgreSQL DSN，并返回不含凭据的日志目标。"""
+    try:
+        parsed = urlsplit(value)
+        port = parsed.port
+    except ValueError as exc:
+        raise ValueError(f"{key} must be a valid PostgreSQL URL") from exc
+
+    if (
+        parsed.scheme not in {"postgresql", "postgresql+psycopg"}
+        or not parsed.hostname
+        or not parsed.path.lstrip("/")
+    ):
+        raise ValueError(f"{key} must be a PostgreSQL URL")
+
+    password = unquote(parsed.password or "")
+    username = unquote(parsed.username or "")
+    if app_env == "production" and password.lower() in {
+        "changeme",
+        "password",
+        "postgres",
+    }:
+        raise ValueError(f"{key} uses a default database password")
+    if app_env == "production" and password and password == username:
+        raise ValueError(f"{key} uses a default database password")
+
+    host = parsed.hostname
+    if port is not None:
+        host = f"{host}:{port}"
+    return f"{host}/{parsed.path.lstrip('/')}"
 
 
 class Config:
@@ -96,6 +144,48 @@ class Config:
 
     # P3 新增：回调验签密钥（不配置则跳过签名校验，Ruling R2）
     RTC_CALLBACK_SECRET = os.getenv("RTC_CALLBACK_SECRET", "")
+
+    def __init__(self) -> None:
+        self.APP_ENV = os.getenv("APP_ENV", "development").strip().lower()
+        if self.APP_ENV not in {"development", "test", "production"}:
+            raise ValueError("APP_ENV must be development, test, or production")
+
+        self.STORAGE_BACKEND = os.getenv("STORAGE_BACKEND", "sqlite").strip().lower()
+        if self.STORAGE_BACKEND not in {"sqlite", "postgres"}:
+            raise ValueError("STORAGE_BACKEND must be sqlite or postgres")
+
+        self.DATABASE_URL = os.getenv("DATABASE_URL") or None
+        self.ANALYTICS_DATABASE_URL = os.getenv("ANALYTICS_DATABASE_URL") or None
+        self.DATABASE_POOL_SIZE = _int_env("DATABASE_POOL_SIZE", 5, 1)
+        self.DATABASE_MAX_OVERFLOW = _int_env("DATABASE_MAX_OVERFLOW", 10, 0)
+        self.DATABASE_POOL_TIMEOUT = _int_env("DATABASE_POOL_TIMEOUT", 30, 1)
+        self.DATABASE_POOL_RECYCLE = _int_env("DATABASE_POOL_RECYCLE", 1800, -1)
+
+        requires_postgres = self.STORAGE_BACKEND == "postgres" or self.APP_ENV == "production"
+        if requires_postgres and not self.DATABASE_URL:
+            raise ValueError("DATABASE_URL is required for PostgreSQL storage")
+
+        self._database_log_target = None
+        if self.DATABASE_URL:
+            self._database_log_target = _postgres_target(
+                "DATABASE_URL", self.DATABASE_URL, self.APP_ENV
+            )
+        if self.ANALYTICS_DATABASE_URL:
+            _postgres_target(
+                "ANALYTICS_DATABASE_URL",
+                self.ANALYTICS_DATABASE_URL,
+                self.APP_ENV,
+            )
+
+        self.DATABASE_PATH = (
+            os.getenv("DATABASE_PATH", "data/interview.db")
+            if self.STORAGE_BACKEND == "sqlite"
+            else None
+        )
+
+    def database_log_target(self) -> str | None:
+        """返回可安全写入日志的数据库主机与库名。"""
+        return self._database_log_target
 
     def agent_endpoint_id(self, agent: str) -> str:
         """按 Agent 名取端点 ID；未配置或未知 Agent 回落到默认端点。"""
