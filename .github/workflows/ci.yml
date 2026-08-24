@@ -2,11 +2,12 @@ name: CI
 
 on:
   push:
-    branches: [master, main]
+    branches: [main]
   pull_request:
+    branches: [main]
 
 jobs:
-  ci:
+  frontend-quality:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -25,13 +26,27 @@ jobs:
       - name: Type check
         run: npm run typecheck
 
-      - name: Unit tests
-        run: npm run test
-
       - name: Build
         run: npm run build
 
-  backend-ci:
+  frontend-coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - name: Unit tests and coverage gate
+        run: npm run test:coverage
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: frontend-lcov
+          path: coverage/lcov.info
+
+  backend-coverage:
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -44,8 +59,14 @@ jobs:
       - name: Install dependencies
         run: uv sync --dev
 
-      - name: Backend tests
-        run: uv run pytest -q
+      - name: Backend tests and coverage gate
+        run: uv run pytest --cov=. --cov-report=term-missing --cov-report=xml:coverage.xml -q
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: backend-cobertura
+          path: rag_llm_server/coverage.xml
 
   e2e:
     runs-on: ubuntu-latest

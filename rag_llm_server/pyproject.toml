@@ -38,3 +38,10 @@ dev = [
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+
+[tool.coverage.run]
+omit = ["tests/*", ".venv/*"]
+
+[tool.coverage.report]
+fail_under = 81
+show_missing = true
