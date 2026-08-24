@@ -12,6 +12,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Required check verification (expected failure)
+        run: exit 1
+
       - uses: actions/setup-node@v4
         with:
           node-version: 20
