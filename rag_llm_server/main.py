@@ -18,6 +18,7 @@ from api import reports as reports_api
 from api import resume as resume_api
 from api import rtc as rtc_api
 from config import settings
+from logging_config import configure_logging
 from middleware.request_context import RequestContextMiddleware
 from services.interview_service import shutdown_cold_tasks
 from services.rtc_service import clear_rtc_locks
@@ -78,6 +79,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
 
 
 def create_app() -> FastAPI:
+    configure_logging(settings.APP_ENV, settings.LOG_FORMAT)
     application = FastAPI(lifespan=lifespan)
     application.add_middleware(
         CORSMiddleware,

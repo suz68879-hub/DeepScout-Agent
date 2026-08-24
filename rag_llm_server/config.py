@@ -39,6 +39,8 @@ def _csv_env(key: str, default: tuple[str, ...]) -> tuple[str, ...]:
 
 
 class Config:
+    APP_ENV = os.getenv("APP_ENV", "development").strip().lower()
+    LOG_FORMAT = os.getenv("LOG_FORMAT", "json").strip().lower()
     CORS_ORIGINS = _csv_env(
         "CORS_ORIGINS",
         ("http://localhost:3000", "http://127.0.0.1:3000"),
