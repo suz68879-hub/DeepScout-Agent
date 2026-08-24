@@ -1,8 +1,8 @@
 # Phase 0 验收证据
 
 > 验收日期：2026-08-24  
-> 本地验收 HEAD：`e47c827`  
-> 状态：已阻塞（仅剩 GitHub 外部门禁）
+> 最终验收 HEAD：`48f10a4`
+> 状态：已完成
 
 ## 本地验收
 
@@ -24,17 +24,11 @@
 - CI 已拆分为 `frontend-quality`、`frontend-coverage`、`backend-coverage`、`e2e`，覆盖率报告作为 artifact 上传。
 - GitHub 为 `origin`，Gitee 为 `gitee`；本地 `main` 未改写历史、未 force push。
 
-## 外部阻塞
+## GitHub 门禁验收
 
-两次执行 `git push origin main` 均在连接 GitHub 前失败：
+- `main` 已推送至 `48f10a439ece59e989d230d13c88e803f7909373`，远端与本地 SHA 一致。
+- 仓库管理员确认 `frontend-quality`、`frontend-coverage`、`backend-coverage`、`e2e` 均已配置为 `main` required checks，最终运行全绿。
+- [验证 PR #1](https://github.com/suz68879-hub/DeepScout-Agent/pull/1) 使用提交 `8b190c9` 主动令 `frontend-quality` 失败；GitHub 将该检查标记为必需并禁用合并按钮。
+- 验证 PR 已关闭，远端与本地临时分支 `codex/phase0-required-check-verification` 均已删除；未向 `main` 合入预期失败提交。
 
-1. `Recv failure: Connection was reset`
-2. `Failed to connect to github.com port 443`
-
-因此以下门槛尚未完成：
-
-- [ ] 推送本地 Phase 0 提交到 GitHub `main`。
-- [ ] 核验四个 Actions checks 全绿。
-- [ ] 将四个 checks 配置为 `main` required checks，并验证失败检查可阻止合并。
-
-根据阶段索引，阻塞解除并补齐远端运行链接、commit SHA 前，不开始 Phase 1。
+Phase 0 本地与 GitHub 退出门槛全部通过，可以进入 Phase 1。

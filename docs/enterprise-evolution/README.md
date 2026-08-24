@@ -14,7 +14,7 @@
 
 | 阶段 | 文档 | 主要产出 | 前置阶段 | 状态 |
 |---|---|---|---|---|
-| Phase 0 | [恢复绿色基线](phase-0-恢复绿色基线.md) | 全绿测试、Request ID、JSON 日志、GitHub 基线 | 无 | 已阻塞 |
+| Phase 0 | [恢复绿色基线](phase-0-恢复绿色基线.md) | 全绿测试、Request ID、JSON 日志、GitHub 基线 | 无 | 已完成 |
 | Phase 1 | [PostgreSQL 与数据迁移](phase-1-PostgreSQL与数据迁移.md) | PostgreSQL Repository、Alembic、迁移工具 | Phase 0 | 未开始 |
 | Phase 2 | [Redis 与无状态 API](phase-2-Redis与无状态API.md) | Redis 会话、限流、锁、幂等 | Phase 1 | 未开始 |
 | Phase 3 | [持久化任务队列与 Outbox](phase-3-持久化任务队列与Outbox.md) | Celery、RabbitMQ、任务状态机、Outbox | Phase 2 | 未开始 |
