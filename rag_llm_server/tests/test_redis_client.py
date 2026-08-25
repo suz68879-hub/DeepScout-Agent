@@ -1,4 +1,5 @@
 """Redis 共享状态连接与生命周期测试。"""
+import os
 from types import SimpleNamespace
 
 import pytest
@@ -87,6 +88,25 @@ async def test_ping_redis_maps_runtime_connection_error(monkeypatch):
 
 async def test_disabled_redis_has_no_local_fallback():
     assert await redis_client.init_redis(redis_config(url=None)) is None
+
+    with pytest.raises(redis_client.SharedStateUnavailable):
+        redis_client.get_redis()
+
+
+async def test_live_redis_ping_version_and_pool_release():
+    url = os.getenv("REDIS_URL")
+    if not url:
+        pytest.skip("REDIS_URL is required for Redis integration")
+    config = redis_config(url=url)
+
+    client = await redis_client.init_redis(config)
+    try:
+        assert await redis_client.ping_redis() is True
+        server_info = await client.info(section="server")
+        major = int(server_info["redis_version"].split(".", 1)[0])
+        assert major >= 7
+    finally:
+        await redis_client.close_redis()
 
     with pytest.raises(redis_client.SharedStateUnavailable):
         redis_client.get_redis()
