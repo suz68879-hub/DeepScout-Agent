@@ -16,7 +16,12 @@ from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoin
 from starlette.responses import Response
 
 from config import settings
-from services.redis_client import SharedStateUnavailable, get_redis, redis_error_boundary
+from services.redis_client import (
+    SharedStateUnavailable,
+    data_unavailable,
+    get_redis,
+    redis_error_boundary,
+)
 from services.redis_keys import (
     IDEMPOTENCY_TTL_SECONDS,
     RedisDataError,
@@ -209,7 +214,7 @@ class IdempotencyStore:
                         return decision
                     await asyncio.sleep(min(self._poll_interval, remaining))
         except RedisDataError as exc:
-            raise SharedStateUnavailable("Redis shared state is unavailable") from exc
+            raise data_unavailable() from exc
 
     async def complete(
         self,

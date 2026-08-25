@@ -1,4 +1,5 @@
 from fastapi.middleware.cors import CORSMiddleware
+import httpx
 import pytest
 
 import main
@@ -28,6 +29,38 @@ def test_cors_uses_configured_origins_with_credentials(monkeypatch):
     middleware = next(item for item in app.user_middleware if item.cls is CORSMiddleware)
     assert middleware.kwargs["allow_origins"] == list(origins)
     assert middleware.kwargs["allow_credentials"] is True
+
+
+async def test_liveness_does_not_check_redis(monkeypatch):
+    async def fail_if_called():
+        raise AssertionError("liveness must not check Redis")
+
+    monkeypatch.setattr(main, "check_redis_readiness", fail_if_called)
+    transport = httpx.ASGITransport(app=main.create_app())
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/health/live")
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "live"}
+
+
+async def test_readiness_returns_generic_503_without_dependency_details(monkeypatch):
+    async def unavailable():
+        return False
+
+    monkeypatch.setattr(main, "check_redis_readiness", unavailable)
+    transport = httpx.ASGITransport(app=main.create_app())
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/health/ready")
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "status": "not_ready",
+        "components": {"redis": "unavailable"},
+    }
+    assert "host" not in response.text.lower()
 
 
 async def test_lifespan_initializes_and_closes_resources(monkeypatch):

@@ -23,7 +23,7 @@ from logging_config import configure_logging
 from middleware.request_context import RequestContextMiddleware
 from middleware.idempotency import IdempotencyKeyMiddleware
 from services.interview_service import shutdown_cold_tasks
-from services.redis_client import close_redis, init_redis
+from services.redis_client import check_redis_readiness, close_redis, init_redis
 from services.storage import close_storage, init_storage
 
 logger = logging.getLogger(__name__)
@@ -113,6 +113,23 @@ def create_app() -> FastAPI:
     application.add_middleware(RequestContextMiddleware)
 
     application.add_exception_handler(Exception, unhandled_exception_handler)
+
+    @application.get("/health/live", include_in_schema=False)
+    async def liveness():
+        return {"status": "live"}
+
+    @application.get("/health/ready", include_in_schema=False)
+    async def readiness():
+        if await check_redis_readiness():
+            return {"status": "ready"}
+        return JSONResponse(
+            status_code=503,
+            content={
+                "status": "not_ready",
+                "components": {"redis": "unavailable"},
+            },
+        )
+
     application.include_router(auth_api.router)
     application.include_router(resume_api.router)
     application.include_router(interview_api.router)
