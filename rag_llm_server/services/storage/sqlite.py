@@ -9,7 +9,7 @@ import aiosqlite
 from config import settings
 from services.auth_service import hash_password_async, normalize_username, validate_password
 from services.clock import utc_now
-from .base import BaseStorage, StorageConflictError
+from .base import BaseStorage, StorageConflictError, StorageVersionConflictError
 
 
 _SCHEMA = """
@@ -48,7 +48,8 @@ CREATE TABLE IF NOT EXISTS interview_session (
   rtc_user_id TEXT NOT NULL UNIQUE,
   rtc_task_id TEXT NOT NULL UNIQUE,
   rtc_callback_id TEXT NOT NULL UNIQUE,
-  rtc_status TEXT NOT NULL DEFAULT 'created'
+  rtc_status TEXT NOT NULL DEFAULT 'created',
+  version INTEGER NOT NULL DEFAULT 1
 );
 CREATE TABLE IF NOT EXISTS message (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -134,6 +135,9 @@ class SqliteStorage(BaseStorage):
             await self._add_column("interview_session", "rtc_callback_id", "TEXT")
             await self._add_column(
                 "interview_session", "rtc_status", "TEXT NOT NULL DEFAULT 'created'",
+            )
+            await self._add_column(
+                "interview_session", "version", "INTEGER NOT NULL DEFAULT 1",
             )
 
             session_rows = await (
@@ -384,6 +388,10 @@ class SqliteStorage(BaseStorage):
         if row.get("resume_id") and not await self.resume_get(user_id, row["resume_id"]):
             raise ValueError("resume does not belong to user")
         row.setdefault("id", str(uuid.uuid4()))
+        row.setdefault("resume_id", None)
+        row.setdefault("position", None)
+        row.setdefault("stage", None)
+        row.setdefault("status", None)
         row.setdefault("started_at", None)
         row.setdefault("ended_at", None)
         room_id, rtc_user_id, task_id, callback_id = self._new_rtc_ids()
@@ -392,12 +400,13 @@ class SqliteStorage(BaseStorage):
         row.setdefault("rtc_task_id", task_id)
         row.setdefault("rtc_callback_id", callback_id)
         row.setdefault("rtc_status", "created")
+        row.setdefault("version", 1)
         row["user_id"] = user_id
         await self._c().execute(
             "INSERT INTO interview_session (id, user_id, resume_id, position, stage, status, "
-            "started_at, ended_at, rtc_room_id, rtc_user_id, rtc_task_id, rtc_callback_id, rtc_status) "
+            "started_at, ended_at, rtc_room_id, rtc_user_id, rtc_task_id, rtc_callback_id, rtc_status, version) "
             "VALUES (:id, :user_id, :resume_id, :position, :stage, :status, :started_at, :ended_at, "
-            ":rtc_room_id, :rtc_user_id, :rtc_task_id, :rtc_callback_id, :rtc_status)", row,
+            ":rtc_room_id, :rtc_user_id, :rtc_task_id, :rtc_callback_id, :rtc_status, :version)", row,
         )
         await self._c().commit()
         return row
@@ -417,15 +426,33 @@ class SqliteStorage(BaseStorage):
         )).fetchone()
         return dict(row) if row else None
 
-    async def session_update(self, user_id: str, session_id: str, patch: dict) -> dict | None:
+    async def session_update(
+        self,
+        user_id: str,
+        session_id: str,
+        patch: dict,
+        expected_version: int | None = None,
+    ) -> dict | None:
         fields = {key: patch[key] for key in patch if key in self.SESSION_COLS}
         if not fields:
             return await self.session_get(user_id, session_id)
         sets = ", ".join(f"{key} = :{key}" for key in fields)
-        await self._c().execute(
-            f"UPDATE interview_session SET {sets} WHERE id = :id AND user_id = :user_id",
-            {**fields, "id": session_id, "user_id": user_id},
+        version_set = ", version = version + 1" if expected_version is not None else ""
+        version_where = " AND version = :expected_version" if expected_version is not None else ""
+        cursor = await self._c().execute(
+            f"UPDATE interview_session SET {sets}{version_set} "
+            f"WHERE id = :id AND user_id = :user_id{version_where}",
+            {
+                **fields,
+                "id": session_id,
+                "user_id": user_id,
+                "expected_version": expected_version,
+            },
         )
+        if expected_version is not None and cursor.rowcount == 0:
+            if await self.session_get(user_id, session_id):
+                raise StorageVersionConflictError("session version conflict")
+            return None
         await self._c().commit()
         return await self.session_get(user_id, session_id)
 

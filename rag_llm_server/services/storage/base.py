@@ -9,6 +9,10 @@ class StorageConflictError(Exception):
     """持久化唯一性约束冲突，不暴露具体数据库异常。"""
 
 
+class StorageVersionConflictError(Exception):
+    """资源版本已变化，调用方必须重新读取后再更新。"""
+
+
 class BaseStorage(ABC):
     @abstractmethod
     async def init(self) -> None: ...
@@ -48,7 +52,13 @@ class BaseStorage(ABC):
     @abstractmethod
     async def session_get_by_callback(self, callback_id: str) -> dict | None: ...
     @abstractmethod
-    async def session_update(self, user_id: str, session_id: str, patch: dict) -> dict | None: ...
+    async def session_update(
+        self,
+        user_id: str,
+        session_id: str,
+        patch: dict,
+        expected_version: int | None = None,
+    ) -> dict | None: ...
     @abstractmethod
     async def session_list_running(self, user_id: str) -> list[dict]: ...
 
