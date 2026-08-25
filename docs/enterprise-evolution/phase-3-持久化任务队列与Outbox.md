@@ -56,6 +56,7 @@
 
 ### P3-T03 实现任务状态机 Repository
 
+- **实施状态**：已完成；状态矩阵、并发 claim、终态保护、owner 隔离与租约恢复验证通过。
 - **依赖/并行**：P3-T02。**规模/角色**：M，后端。
 - **预计文件**：`rag_llm_server/services/jobs/repository.py`、`rag_llm_server/services/jobs/types.py`、`rag_llm_server/tests/test_job_repository.py`、`rag_llm_server/tests/test_job_state_machine.py`。
 - **契约与步骤**：提供幂等 create/get/claim/succeed/fail/requeue/cancel；状态转换用条件 UPDATE；owner 查询强制租户隔离；公开错误只保存枚举 error_code。
@@ -65,9 +66,9 @@
 
 #### 检查点 A：P3-T01～P3-T03
 
-- [ ] RabbitMQ 消息配置满足持久化与 late ack。
-- [ ] Schema 只有 expand 变化且旧版本仍能运行。
-- [ ] 并发 worker 只能 claim 同一 job 一次。
+- [x] RabbitMQ 消息配置满足持久化与 late ack。
+- [x] Schema 只有 expand 变化且旧版本仍能运行。
+- [x] 并发 worker 只能 claim 同一 job 一次。
 
 ### P3-T04 建立统一任务分发接口
 
