@@ -1,7 +1,10 @@
 """录音分析 API（spec §12.5）。"""
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+import hashlib
+
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 
 from api.auth import get_current_user
+from middleware.idempotency import execute_idempotent
 from services.recording_service import (
     ALLOWED_EXTS, DEFAULT_POSITION, MAX_UPLOAD_BYTES, upload_recording,
 )
@@ -15,6 +18,7 @@ async def upload_recording_file(
     file: UploadFile = File(...),
     position: str = Form(DEFAULT_POSITION),
     user: dict = Depends(get_current_user),
+    request: Request = None,
 ):
     """上传面试录音：边界校验 → TOS → 提交识别任务 → {recording_id, status}。"""
     filename = file.filename or "recording"
@@ -26,13 +30,21 @@ async def upload_recording_file(
         raise HTTPException(status_code=422, detail="录音文件为空")
     if len(raw) > MAX_UPLOAD_BYTES:
         raise HTTPException(status_code=413, detail="录音超过 200MB 上限")
-    try:
-        row = await upload_recording(user["id"], filename, ext, raw, position)
-    except (RuntimeError, OSError) as e:
-        raise HTTPException(status_code=503, detail=f"录音上传失败：{e}")
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=f"语音识别任务提交失败：{e}")
-    return {"recording_id": row["id"], "status": row["status"]}
+    async def operation():
+        try:
+            row = await upload_recording(user["id"], filename, ext, raw, position)
+        except (RuntimeError, OSError) as e:
+            raise HTTPException(status_code=503, detail=f"录音上传失败：{e}")
+        except Exception as e:
+            raise HTTPException(status_code=502, detail=f"语音识别任务提交失败：{e}")
+        return {"recording_id": row["id"], "status": row["status"]}
+
+    fingerprint = {
+        "filename": filename,
+        "position": position,
+        "content_sha256": hashlib.sha256(raw).hexdigest(),
+    }
+    return await execute_idempotent(request, user, fingerprint, operation)
 
 
 @router.get("/{recording_id}")

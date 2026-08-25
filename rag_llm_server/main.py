@@ -21,6 +21,7 @@ from config import settings
 from db import close_database, init_database
 from logging_config import configure_logging
 from middleware.request_context import RequestContextMiddleware
+from middleware.idempotency import IdempotencyKeyMiddleware
 from services.interview_service import shutdown_cold_tasks
 from services.redis_client import close_redis, init_redis
 from services.storage import close_storage, init_storage
@@ -92,6 +93,7 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    application.add_middleware(IdempotencyKeyMiddleware)
 
     @application.middleware("http")
     async def enforce_browser_origin(request: Request, call_next):

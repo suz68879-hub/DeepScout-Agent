@@ -1,4 +1,5 @@
 """P6 T7：录音 API 边界校验与状态查询。"""
+import hashlib
 import io
 
 import pytest
@@ -68,6 +69,37 @@ async def test_upload_happy_path(monkeypatch):
     assert resp.json() == {"recording_id": "r1", "status": "processing"}
     assert captured["filename"] == "a.wav" and captured["ext"] == "wav"
     assert captured["raw"] == b"RIFF" and captured["position"] == "真实面试录音"
+
+
+async def test_upload_idempotency_fingerprint_contains_hash_not_audio(monkeypatch):
+    captured = {}
+
+    async def fake_upload(user_id, filename, ext, raw, position):
+        return {"id": "r1", "status": "processing"}
+
+    async def fake_execute(request, user, body, operation):
+        captured.update({"request": request, "user": user, "body": body})
+        return await operation()
+
+    monkeypatch.setattr(rec_api, "upload_recording", fake_upload)
+    monkeypatch.setattr(rec_api, "execute_idempotent", fake_execute)
+    request = object()
+    result = await rec_api.upload_recording_file(
+        _upload("a.wav", b"RIFF"),
+        position="Backend",
+        user=TEST_USER,
+        request=request,
+    )
+    assert result == {"recording_id": "r1", "status": "processing"}
+    assert captured == {
+        "request": request,
+        "user": TEST_USER,
+        "body": {
+            "filename": "a.wav",
+            "position": "Backend",
+            "content_sha256": hashlib.sha256(b"RIFF").hexdigest(),
+        },
+    }
 
 
 async def test_upload_tos_unavailable_returns_503(monkeypatch):
