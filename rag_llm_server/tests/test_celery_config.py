@@ -186,6 +186,7 @@ def test_celery_app_uses_durable_json_queues_and_reliable_delivery(monkeypatch):
     assert app.conf.result_serializer == "json"
     assert app.conf.accept_content == ["json"]
     assert app.conf.result_backend is None
+    assert "tasks.outbox_dispatcher" in app.conf.imports
     assert app.conf.task_routes["tasks.interview_tasks.*"]["queue"] == "deepscout.cold"
     assert (
         app.conf.task_routes["tasks.recording_tasks.*"]["queue"]

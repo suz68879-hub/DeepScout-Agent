@@ -91,6 +91,14 @@ def create_celery_app(config: Config) -> Celery:
                 "routing_key": "outbox",
             },
         },
+        beat_schedule={
+            "dispatch-pending-outbox": {
+                "task": "tasks.outbox_dispatcher.dispatch_pending",
+                "schedule": 1.0,
+                "options": {"queue": OUTBOX_QUEUE, "routing_key": "outbox"},
+            },
+        },
+        imports=("tasks.outbox_dispatcher",),
         task_create_missing_queues=False,
         task_default_queue=COLD_QUEUE,
         task_default_delivery_mode=2,

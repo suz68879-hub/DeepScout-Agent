@@ -82,6 +82,7 @@
 
 ### P3-T05 实现 Transactional Outbox 与投递器
 
+- **实施状态**：已完成；PostgreSQL `SKIP LOCKED` 批量 claim、RabbitMQ mandatory publisher confirm、失败退避/告警、短断恢复与重复消息幂等验收通过。
 - **依赖/并行**：P3-T04。**规模/角色**：M，后端/SRE。
 - **预计文件**：`rag_llm_server/services/jobs/outbox.py`、`rag_llm_server/tasks/outbox_dispatcher.py`、`rag_llm_server/tests/test_outbox.py`、`rag_llm_server/tests/integration/test_outbox_rabbitmq.py`。
 - **契约与步骤**：业务/Job/Outbox 同事务；dispatcher 用 `FOR UPDATE SKIP LOCKED` 批量 claim，publisher confirm 后标记 published；重复发布沿用 job_id 幂等。
@@ -91,9 +92,9 @@
 
 #### 检查点 B：P3-T04～P3-T05
 
-- [ ] API 事务提交后必有可恢复 Outbox 记录。
-- [ ] 双 dispatcher 不会永久漏发，重复发布无重复业务效果。
-- [ ] 测试 inline adapter 不可能在生产启用。
+- [x] API 事务提交后必有可恢复 Outbox 记录。
+- [x] 双 dispatcher 不会永久漏发，重复发布无重复业务效果。
+- [x] 测试 inline adapter 不可能在生产启用。
 
 ### P3-T06 迁移面试冷路径任务
 
