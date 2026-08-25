@@ -80,6 +80,7 @@ def _clear_redis_env(monkeypatch):
         "REDIS_MAX_CONNECTIONS",
         "REDIS_SOCKET_TIMEOUT",
         "REDIS_CONNECT_TIMEOUT",
+        "AUTH_SESSION_CACHE_ENABLED",
     ):
         monkeypatch.delenv(key, raising=False)
 
@@ -281,4 +282,24 @@ def test_production_requires_redis_url(monkeypatch):
     )
 
     with pytest.raises(ValueError, match="REDIS_URL is required"):
+        Config()
+
+
+def test_session_cache_flag_is_opt_in_and_requires_redis(monkeypatch):
+    _clear_database_env(monkeypatch)
+    _clear_redis_env(monkeypatch)
+    assert Config().AUTH_SESSION_CACHE_ENABLED is False
+
+    monkeypatch.setenv("REDIS_URL", "redis://cache.internal/0")
+    assert Config().AUTH_SESSION_CACHE_ENABLED is False
+    monkeypatch.setenv("AUTH_SESSION_CACHE_ENABLED", "true")
+    assert Config().AUTH_SESSION_CACHE_ENABLED is True
+
+
+def test_session_cache_cannot_be_enabled_without_redis(monkeypatch):
+    _clear_database_env(monkeypatch)
+    _clear_redis_env(monkeypatch)
+    monkeypatch.setenv("AUTH_SESSION_CACHE_ENABLED", "true")
+
+    with pytest.raises(ValueError, match="AUTH_SESSION_CACHE_ENABLED requires REDIS_URL"):
         Config()

@@ -1,7 +1,15 @@
+import os
+
 import httpx
+import pytest
 from fastapi import FastAPI
+from redis.asyncio import Redis
 
 import api.auth as auth_api
+from services.auth_service import token_digest
+from services.redis_client import SharedStateUnavailable
+from services.redis_keys import auth_session_key
+from services.session_cache import SessionCache
 
 
 async def test_register_me_and_logout_cookie_flow(tmp_storage, monkeypatch):
@@ -77,3 +85,71 @@ async def test_login_rate_limit_is_process_local(tmp_storage, monkeypatch):
         )
         assert response.status_code == 429
     await storage.close()
+
+
+async def test_session_cache_failure_returns_503_instead_of_401(monkeypatch):
+    class FailingCache:
+        async def resolve(self, _digest, _loader):
+            raise SharedStateUnavailable("Redis shared state is unavailable")
+
+    monkeypatch.setattr(auth_api.settings, "AUTH_SESSION_CACHE_ENABLED", True)
+    monkeypatch.setattr(auth_api, "get_session_cache", lambda: FailingCache())
+    app = FastAPI()
+    app.include_router(auth_api.router)
+    transport = httpx.ASGITransport(app=app)
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        client.cookies.set(auth_api.COOKIE_NAME, "opaque-token")
+        response = await client.get("/api/auth/me")
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": "shared state unavailable"}
+
+
+async def test_two_api_clients_share_login_and_logout_state(tmp_storage, monkeypatch):
+    url = os.getenv("REDIS_URL")
+    if not url:
+        pytest.skip("REDIS_URL is required for Redis integration")
+    storage = await tmp_storage()
+    first_redis = Redis.from_url(url, decode_responses=True)
+    second_redis = Redis.from_url(url, decode_responses=True)
+    caches = {
+        "active": SessionCache(first_redis, "test"),
+        "first": SessionCache(first_redis, "test"),
+        "second": SessionCache(second_redis, "test"),
+    }
+    token = None
+    monkeypatch.setattr(auth_api, "storage", storage)
+    monkeypatch.setattr(auth_api.settings, "APP_ENV", "test")
+    monkeypatch.setattr(auth_api.settings, "AUTH_SESSION_CACHE_ENABLED", True)
+    monkeypatch.setattr(auth_api, "get_session_cache", lambda: caches["active"])
+    auth_api.reset_rate_limits()
+    app = FastAPI()
+    app.include_router(auth_api.router)
+    transport = httpx.ASGITransport(app=app)
+
+    try:
+        async with (
+            httpx.AsyncClient(transport=transport, base_url="http://test") as first,
+            httpx.AsyncClient(transport=transport, base_url="http://test") as second,
+        ):
+            registered = await first.post(
+                "/api/auth/register",
+                json={"username": "shared_user", "password": "password-123"},
+            )
+            assert registered.status_code == 201
+            token = first.cookies.get(auth_api.COOKIE_NAME)
+            second.cookies.set(auth_api.COOKIE_NAME, token)
+
+            caches["active"] = caches["second"]
+            assert (await second.get("/api/auth/me")).status_code == 200
+            assert (await second.post("/api/auth/logout")).status_code == 204
+
+            caches["active"] = caches["first"]
+            assert (await first.get("/api/auth/me")).status_code == 401
+    finally:
+        if token:
+            await first_redis.delete(auth_session_key("test", token_digest(token)))
+        await first_redis.aclose()
+        await second_redis.aclose()
+        await storage.close()

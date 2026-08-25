@@ -310,12 +310,21 @@ class SqliteStorage(BaseStorage):
         await self._c().commit()
 
     async def auth_session_get_user(self, token_hash: str) -> dict | None:
+        session = await self.auth_session_get(token_hash)
+        return session["user"] if session else None
+
+    async def auth_session_get(self, token_hash: str) -> dict | None:
         row = await (await self._c().execute(
-            "SELECT u.* FROM auth_session s JOIN app_user u ON u.id = s.user_id "
+            "SELECT u.*, s.expires_at AS session_expires_at "
+            "FROM auth_session s JOIN app_user u ON u.id = s.user_id "
             "WHERE s.token_hash = ? AND s.revoked_at IS NULL AND s.expires_at > ?",
             (token_hash, utc_now()),
         )).fetchone()
-        return dict(row) if row else None
+        if row is None:
+            return None
+        user = dict(row)
+        expires_at = user.pop("session_expires_at")
+        return {"user": user, "expires_at": expires_at}
 
     async def auth_session_revoke(self, token_hash: str) -> None:
         await self._c().execute(

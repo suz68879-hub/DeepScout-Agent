@@ -107,16 +107,28 @@ class PostgresAuthRepository:
         await self._session.flush()
 
     async def auth_session_get_user(self, token_hash: str) -> dict | None:
-        user = await self._session.scalar(
-            select(AppUser)
+        session = await self.auth_session_get(token_hash)
+        return session["user"] if session else None
+
+    async def auth_session_get(self, token_hash: str) -> dict | None:
+        row = (
+            await self._session.execute(
+                select(AppUser, AuthSession.expires_at)
             .join(AuthSession, AuthSession.user_id == AppUser.id)
             .where(
                 AuthSession.token_hash == token_hash,
                 AuthSession.revoked_at.is_(None),
                 AuthSession.expires_at > func.now(),
             )
-        )
-        return _user_dict(user) if user else None
+            )
+        ).one_or_none()
+        if row is None:
+            return None
+        user, expires_at = row
+        return {
+            "user": _user_dict(user),
+            "expires_at": expires_at.astimezone(timezone.utc).isoformat(),
+        }
 
     async def auth_session_revoke(self, token_hash: str) -> None:
         await self._session.execute(
@@ -547,6 +559,9 @@ class PostgresStorage(BaseStorage):
 
     async def auth_session_get_user(self, token_hash):
         return await self._call("auth_session_get_user", token_hash)
+
+    async def auth_session_get(self, token_hash):
+        return await self._call("auth_session_get", token_hash)
 
     async def auth_session_revoke(self, token_hash):
         return await self._call("auth_session_revoke", token_hash)

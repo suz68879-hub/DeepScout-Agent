@@ -1,5 +1,6 @@
 """进程级异步 Redis client 生命周期与稳定错误边界。"""
 import asyncio
+from contextlib import asynccontextmanager
 
 from redis.asyncio import Redis
 from redis.exceptions import RedisError
@@ -52,6 +53,17 @@ async def ping_redis() -> bool:
     """验证运行期连接并把底层异常映射为稳定错误。"""
     try:
         return bool(await get_redis().ping())
+    except SharedStateUnavailable:
+        raise
+    except (RedisError, OSError, asyncio.TimeoutError) as exc:
+        raise _unavailable(exc) from exc
+
+
+@asynccontextmanager
+async def redis_error_boundary(client: Redis | None = None):
+    """把任意 Redis 命令的底层故障转换为共享状态稳定错误。"""
+    try:
+        yield client or get_redis()
     except SharedStateUnavailable:
         raise
     except (RedisError, OSError, asyncio.TimeoutError) as exc:

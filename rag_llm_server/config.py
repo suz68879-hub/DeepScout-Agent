@@ -200,6 +200,9 @@ class Config:
         self.REDIS_MAX_CONNECTIONS = _int_env("REDIS_MAX_CONNECTIONS", 20, 1)
         self.REDIS_SOCKET_TIMEOUT = _positive_float_env("REDIS_SOCKET_TIMEOUT", 2.0)
         self.REDIS_CONNECT_TIMEOUT = _positive_float_env("REDIS_CONNECT_TIMEOUT", 2.0)
+        self.AUTH_SESSION_CACHE_ENABLED = _bool_env(
+            "AUTH_SESSION_CACHE_ENABLED", False
+        )
 
         requires_postgres = self.STORAGE_BACKEND == "postgres" or self.APP_ENV == "production"
         if requires_postgres and not self.DATABASE_URL:
@@ -223,6 +226,8 @@ class Config:
         self.REDIS_TLS = False
         if self.REDIS_URL:
             self._redis_log_target, self.REDIS_TLS = _redis_target(self.REDIS_URL)
+        if self.AUTH_SESSION_CACHE_ENABLED and not self.REDIS_URL:
+            raise ValueError("AUTH_SESSION_CACHE_ENABLED requires REDIS_URL")
 
         self.DATABASE_PATH = (
             os.getenv("DATABASE_PATH", "data/interview.db")
