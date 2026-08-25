@@ -17,6 +17,7 @@ from db.models import (
     Resume,
 )
 from services.storage.base import BaseStorage, StorageConflictError, StorageVersionConflictError
+from services.storage.pagination import Cursor, CursorError, Page, encode_cursor
 
 
 def _as_datetime(value: str) -> datetime:
@@ -402,6 +403,48 @@ class PostgresRepository(PostgresAuthRepository):
             for model in models
         ]
 
+    async def report_page(
+        self, user_id: str, limit: int, cursor: Cursor | None
+    ) -> Page:
+        if not 1 <= limit <= 100:
+            raise ValueError("limit must be between 1 and 100")
+        tenant_id = uuid.UUID(user_id)
+        statement = select(InterviewReport).where(InterviewReport.user_id == tenant_id)
+        if cursor is not None:
+            cursor_time = _as_datetime(cursor.created_at)
+            anchor = await self._session.scalar(
+                select(InterviewReport.id).where(
+                    InterviewReport.user_id == tenant_id,
+                    InterviewReport.id == uuid.UUID(cursor.id),
+                    InterviewReport.created_at == cursor_time,
+                )
+            )
+            if anchor is None:
+                raise CursorError("invalid or expired cursor")
+            statement = statement.where(
+                (InterviewReport.created_at < cursor_time)
+                | (
+                    (InterviewReport.created_at == cursor_time)
+                    & (InterviewReport.id < uuid.UUID(cursor.id))
+                )
+            )
+        models = (
+            await self._session.scalars(
+                statement.order_by(
+                    InterviewReport.created_at.desc(), InterviewReport.id.desc()
+                ).limit(limit + 1)
+            )
+        ).all()
+        items = [
+            _row_dict(model, {"scores_json", "feedback_json", "suggestions_json"})
+            for model in models[:limit]
+        ]
+        next_cursor = None
+        if len(models) > limit:
+            last = items[-1]
+            next_cursor = encode_cursor(last["created_at"], last["id"])
+        return Page(items=items, next_cursor=next_cursor)
+
     async def recording_create(self, user_id: str, recording: dict) -> dict:
         if recording.get("report_id") and not await self.report_get(
             user_id, recording["report_id"]
@@ -562,6 +605,9 @@ class PostgresStorage(BaseStorage):
 
     async def report_list(self, user_id):
         return await self._call("report_list", user_id)
+
+    async def report_page(self, user_id, limit, cursor):
+        return await self._call("report_page", user_id, limit, cursor)
 
     async def recording_create(self, user_id, recording):
         return await self._call("recording_create", user_id, recording)

@@ -10,6 +10,7 @@ from config import settings
 from services.auth_service import hash_password_async, normalize_username, validate_password
 from services.clock import utc_now
 from .base import BaseStorage, StorageConflictError, StorageVersionConflictError
+from .pagination import Cursor, CursorError, Page, encode_cursor
 
 
 _SCHEMA = """
@@ -549,6 +550,7 @@ class SqliteStorage(BaseStorage):
         if row.get("session_id") and not await self.session_get(user_id, row["session_id"]):
             raise ValueError("session does not belong to user")
         row.setdefault("id", str(uuid.uuid4()))
+        row.setdefault("session_id", None)
         row.setdefault("md_path", None)
         row.setdefault("position", None)
         row.setdefault("source", "session")
@@ -575,3 +577,37 @@ class SqliteStorage(BaseStorage):
             "SELECT * FROM interview_report WHERE user_id = ? ORDER BY created_at DESC", (user_id,),
         )).fetchall()
         return [dict(row) for row in rows]
+
+    async def report_page(
+        self, user_id: str, limit: int, cursor: Cursor | None
+    ) -> Page:
+        if not 1 <= limit <= 100:
+            raise ValueError("limit must be between 1 and 100")
+        parameters: list = [user_id]
+        where = "user_id = ?"
+        if cursor is not None:
+            anchor = await (
+                await self._c().execute(
+                    "SELECT 1 FROM interview_report "
+                    "WHERE user_id = ? AND id = ? AND created_at = ?",
+                    (user_id, cursor.id, cursor.created_at),
+                )
+            ).fetchone()
+            if anchor is None:
+                raise CursorError("invalid or expired cursor")
+            where += " AND (created_at < ? OR (created_at = ? AND id < ?))"
+            parameters.extend([cursor.created_at, cursor.created_at, cursor.id])
+        parameters.append(limit + 1)
+        rows = await (
+            await self._c().execute(
+                f"SELECT * FROM interview_report WHERE {where} "
+                "ORDER BY created_at DESC, id DESC LIMIT ?",
+                parameters,
+            )
+        ).fetchall()
+        items = [dict(row) for row in rows[:limit]]
+        next_cursor = None
+        if len(rows) > limit:
+            last = items[-1]
+            next_cursor = encode_cursor(last["created_at"], last["id"])
+        return Page(items=items, next_cursor=next_cursor)

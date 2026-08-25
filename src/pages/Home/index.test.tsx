@@ -32,7 +32,7 @@ describe('HomePage', () => {
   it('加载最近报告并显示总评分', async () => {
     vi.stubGlobal('fetch', vi.fn().mockImplementation((url: string) => {
       if (String(url).includes('/api/reports')) {
-        return Promise.resolve(jsonResponse([reportRow]));
+        return Promise.resolve(jsonResponse({ items: [reportRow], next_cursor: null }));
       }
       return Promise.reject(new Error(`unexpected ${url}`));
     }));
@@ -49,7 +49,7 @@ describe('HomePage', () => {
     const startBody: unknown[] = [];
     vi.stubGlobal('fetch', vi.fn().mockImplementation((url: string, init?: RequestInit) => {
       const u = String(url);
-      if (u.includes('/api/reports')) return Promise.resolve(jsonResponse([]));
+      if (u.includes('/api/reports')) return Promise.resolve(jsonResponse({ items: [], next_cursor: null }));
       if (u.includes('/api/interview/start')) {
         startBody.push(JSON.parse(String(init?.body ?? '{}')));
         return Promise.resolve(jsonResponse({ session_id: 's-1', position: 'Java后端', stage: 'intro' }));
@@ -90,7 +90,7 @@ describe('HomePage', () => {
     const stubHomeFetch = (recordingResponses: Record<string, unknown>) => {
       vi.stubGlobal('fetch', vi.fn().mockImplementation((url: string) => {
         const u = String(url);
-        if (u.includes('/api/reports')) return Promise.resolve(jsonResponse([]));
+        if (u.includes('/api/reports')) return Promise.resolve(jsonResponse({ items: [], next_cursor: null }));
         if (u.includes('/api/resume')) return Promise.resolve(jsonResponse({ detail: '尚无简历' }, 404));
         if (u.includes('/api/recording/upload')) {
           return Promise.resolve(jsonResponse({ recording_id: 'rec-1', status: 'processing' }));

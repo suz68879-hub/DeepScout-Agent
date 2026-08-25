@@ -1,10 +1,11 @@
 """报告 API（spec §5.3）：列表 / 详情 / MD 导出。"""
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import PlainTextResponse
 
 from api.auth import get_current_user
 from services.storage import get_file_store, storage
 from services.storage.file_storage import LocalFileStorage
+from services.storage.pagination import CursorError, decode_cursor
 
 router = APIRouter(prefix="/api/reports", tags=["reports"])
 file_store = get_file_store()
@@ -25,9 +26,27 @@ async def _read_report_md(md_path: str) -> str:
 
 
 @router.get("")
-async def list_reports(user: dict = Depends(get_current_user)):
-    rows = await storage.report_list(user["id"])
-    return [{key: value for key, value in row.items() if key != "user_id"} for row in rows]
+async def list_reports(
+    user: dict = Depends(get_current_user),
+    limit: int = Query(20, ge=1, le=100),
+    cursor: str | None = None,
+    legacy: bool = False,
+):
+    if legacy:
+        rows = await storage.report_list(user["id"])
+        return [{key: value for key, value in row.items() if key != "user_id"} for row in rows]
+    try:
+        decoded = decode_cursor(cursor) if cursor else None
+        page = await storage.report_page(user["id"], limit, decoded)
+    except CursorError as exc:
+        raise HTTPException(status_code=400, detail="invalid or expired cursor") from exc
+    return {
+        "items": [
+            {key: value for key, value in row.items() if key != "user_id"}
+            for row in page.items
+        ],
+        "next_cursor": page.next_cursor,
+    }
 
 
 @router.get("/{report_id}")

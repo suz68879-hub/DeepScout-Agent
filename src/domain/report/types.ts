@@ -42,6 +42,11 @@ export interface ReportRow {
   source?: string; // 'session' | 'recording'（T3 新增列，旧行无此字段）
 }
 
+export interface ReportPage {
+  items: ReportRow[];
+  next_cursor: string | null;
+}
+
 // spec §2.4 分维度（与后端 DIMENSIONS 一致）
 export const DIMENSIONS = ['技术深度', '项目理解', '表达沟通', '临场表现'] as const;
 

@@ -4,6 +4,8 @@
 """
 from abc import ABC, abstractmethod
 
+from .pagination import Cursor, Page
+
 
 class StorageConflictError(Exception):
     """持久化唯一性约束冲突，不暴露具体数据库异常。"""
@@ -75,6 +77,10 @@ class BaseStorage(ABC):
     async def report_get(self, user_id: str, report_id: str) -> dict | None: ...
     @abstractmethod
     async def report_list(self, user_id: str) -> list[dict]: ...
+    @abstractmethod
+    async def report_page(
+        self, user_id: str, limit: int, cursor: Cursor | None
+    ) -> Page: ...
 
     # recording
     @abstractmethod

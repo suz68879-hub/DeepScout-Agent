@@ -39,7 +39,7 @@ describe('App 路由骨架', () => {
     vi.stubGlobal('fetch', vi.fn().mockImplementation((url: string) => {
       if (String(url).includes('/api/auth/me')) return Promise.resolve(jsonResponse({ id: 'u1', username: 'alice' }));
       if (String(url).includes('/api/resume')) return Promise.resolve(jsonResponse({ detail: '尚无简历' }, 404));
-      if (String(url).includes('/api/reports')) return Promise.resolve(jsonResponse([]));
+      if (String(url).includes('/api/reports')) return Promise.resolve(jsonResponse({ items: [], next_cursor: null }));
       return Promise.reject(new Error(`unexpected ${url}`));
     }));
     render(<App />);
