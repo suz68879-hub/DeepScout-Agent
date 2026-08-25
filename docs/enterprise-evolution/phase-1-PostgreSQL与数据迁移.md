@@ -1,6 +1,6 @@
 # Phase 1：PostgreSQL 与数据迁移
 
-> 状态：进行中（本地退出门槛已通过，等待 GitHub required checks）
+> 状态：已完成
 > 前置阶段：Phase 0 退出门槛全部通过  
 > 建议周期：2～3 个迭代  
 > 阶段负责人：后端负责人；DBA、测试负责人协作

@@ -1,7 +1,7 @@
 # Phase 1 验收证据
 
 > 日期：2026-08-25
-> 状态：本地通过；等待 GitHub required checks
+> 状态：已完成
 > 分支：`codex/phase1-postgresql`
 > Alembic head：`20260825_0003`
 
@@ -20,8 +20,8 @@
 | 门槛 | 结果 |
 |---|---|
 | Alembic `current/check/downgrade base/upgrade head/check` | 通过；head `20260825_0003`，无 Schema 漂移 |
-| 后端全量 + coverage | 352 passed；82.60%，阈值 81% |
-| 后端全量（`APP_ENV=test`、`STORAGE_BACKEND=postgres`） | 352 passed |
+| 后端全量 + coverage | 353 passed；82.39%，阈值 81% |
+| 后端全量（`APP_ENV=test`、`STORAGE_BACKEND=postgres`） | 353 passed |
 | 迁移连接清理（`ResourceWarning=error`） | 8 passed |
 | 前端 lint / typecheck / build | 全部通过 |
 | 前端 coverage | 91 passed；coverage thresholds 通过 |
@@ -51,9 +51,11 @@
 | `c7351fd` | P1-T13 无 PII 基准 |
 | `f17fd2f` | 演练连接清理修复 |
 | `ba350e0` | PostgreSQL CI 门槛 |
+| `da1a225` | CI LangGraph checkpointer 初始化修复与回归测试 |
 
-## 尚待退出门槛
+## GitHub 验证
 
-- 为 `codex/phase1-postgresql` 创建合入 `main` 的 Pull Request。
-- `frontend-quality`、`frontend-coverage`、`backend-coverage`、`e2e` 四项 required checks 全绿。
-- checks 全绿后将本证据和阶段索引状态更新为“已完成”；在此之前不得进入 Phase 2。
+- [PR #3](https://github.com/suz68879-hub/DeepScout-Agent/pull/3) 已创建，目标分支为 `main`。
+- 提交 `da1a225` 的 [GitHub Actions run 32819359805](https://github.com/suz68879-hub/DeepScout-Agent/actions/runs/32819359805) 中，`frontend-quality`、`frontend-coverage`、`backend-coverage`、`e2e` 四项 required checks 全绿。
+- 首次 `backend-coverage` 暴露全新 CI 数据库未初始化 LangGraph `checkpoint_*` 表；修复后增加 CI 初始化顺序回归测试，本地 PostgreSQL CI 等价命令为 353 passed、覆盖率 82.39%。
+- PR 合并到 `main` 前不启动 Phase 2 开发。
