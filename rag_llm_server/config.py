@@ -153,6 +153,8 @@ class Config:
         self.STORAGE_BACKEND = os.getenv("STORAGE_BACKEND", "sqlite").strip().lower()
         if self.STORAGE_BACKEND not in {"sqlite", "postgres"}:
             raise ValueError("STORAGE_BACKEND must be sqlite or postgres")
+        if self.APP_ENV == "production" and self.STORAGE_BACKEND != "postgres":
+            raise ValueError("production requires PostgreSQL storage")
 
         self.DATABASE_URL = os.getenv("DATABASE_URL") or None
         self.ANALYTICS_DATABASE_URL = os.getenv("ANALYTICS_DATABASE_URL") or None

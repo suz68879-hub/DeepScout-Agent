@@ -30,9 +30,9 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    await init_storage()
+    await init_database()
     try:
-        await init_database()
+        await init_storage()
         if not settings.RTC_CALLBACK_SECRET:
             raise RuntimeError("RTC_CALLBACK_SECRET is required")
         await init_graph()

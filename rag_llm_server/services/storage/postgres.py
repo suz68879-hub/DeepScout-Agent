@@ -16,7 +16,7 @@ from db.models import (
     Recording,
     Resume,
 )
-from services.storage.base import StorageConflictError, StorageVersionConflictError
+from services.storage.base import BaseStorage, StorageConflictError, StorageVersionConflictError
 
 
 def _as_datetime(value: str) -> datetime:
@@ -122,6 +122,14 @@ class PostgresAuthRepository:
             update(AuthSession)
             .where(AuthSession.token_hash == token_hash, AuthSession.revoked_at.is_(None))
             .values(revoked_at=datetime.now(timezone.utc))
+        )
+
+    async def auth_session_cleanup(self) -> None:
+        await self._session.execute(
+            AuthSession.__table__.delete().where(
+                (AuthSession.expires_at <= func.now())
+                | AuthSession.revoked_at.is_not(None)
+            )
         )
 
 
@@ -465,3 +473,107 @@ class PostgresRepository(PostgresAuthRepository):
             )
         ).all()
         return [_row_dict(model, {"transcript_json"}) for model in models]
+
+
+class PostgresStorage(BaseStorage):
+    """兼容现有 Storage 接口；每次调用使用独立 Session 和事务。"""
+
+    async def init(self) -> None:
+        from db.engine import get_database_runtime
+
+        get_database_runtime()
+
+    async def close(self) -> None:
+        return None
+
+    async def _call(self, method: str, *args, **kwargs):
+        from db.engine import session_scope
+
+        async with session_scope() as session:
+            repository = PostgresRepository(session)
+            return await getattr(repository, method)(*args, **kwargs)
+
+    async def user_create(self, username, password_hash, role="user"):
+        return await self._call("user_create", username, password_hash, role)
+
+    async def user_get_by_username(self, username):
+        return await self._call("user_get_by_username", username)
+
+    async def auth_session_create(self, user_id, token_hash, expires_at):
+        return await self._call("auth_session_create", user_id, token_hash, expires_at)
+
+    async def auth_session_get_user(self, token_hash):
+        return await self._call("auth_session_get_user", token_hash)
+
+    async def auth_session_revoke(self, token_hash):
+        return await self._call("auth_session_revoke", token_hash)
+
+    async def auth_session_cleanup(self):
+        return await self._call("auth_session_cleanup")
+
+    async def resume_create(self, user_id, resume):
+        return await self._call("resume_create", user_id, resume)
+
+    async def resume_get(self, user_id, resume_id):
+        return await self._call("resume_get", user_id, resume_id)
+
+    async def resume_update(self, user_id, resume_id, patch):
+        return await self._call("resume_update", user_id, resume_id, patch)
+
+    async def resume_list(self, user_id):
+        return await self._call("resume_list", user_id)
+
+    async def resume_latest(self, user_id):
+        return await self._call("resume_latest", user_id)
+
+    async def session_create(self, user_id, session):
+        return await self._call("session_create", user_id, session)
+
+    async def session_get(self, user_id, session_id):
+        return await self._call("session_get", user_id, session_id)
+
+    async def session_get_internal(self, session_id):
+        return await self._call("session_get_internal", session_id)
+
+    async def session_get_by_callback(self, callback_id):
+        return await self._call("session_get_by_callback", callback_id)
+
+    async def session_update(
+        self, user_id, session_id, patch, expected_version: int | None = None
+    ):
+        return await self._call(
+            "session_update", user_id, session_id, patch, expected_version
+        )
+
+    async def session_list_running(self, user_id):
+        return await self._call("session_list_running", user_id)
+
+    async def message_append(self, user_id, session_id, role, content):
+        return await self._call("message_append", user_id, session_id, role, content)
+
+    async def message_list(self, user_id, session_id, limit=100):
+        return await self._call("message_list", user_id, session_id, limit)
+
+    async def report_create(self, user_id, report):
+        return await self._call("report_create", user_id, report)
+
+    async def report_get(self, user_id, report_id):
+        return await self._call("report_get", user_id, report_id)
+
+    async def report_list(self, user_id):
+        return await self._call("report_list", user_id)
+
+    async def recording_create(self, user_id, recording):
+        return await self._call("recording_create", user_id, recording)
+
+    async def recording_get(self, user_id, recording_id):
+        return await self._call("recording_get", user_id, recording_id)
+
+    async def recording_get_internal(self, recording_id):
+        return await self._call("recording_get_internal", recording_id)
+
+    async def recording_update(self, user_id, recording_id, patch):
+        return await self._call("recording_update", user_id, recording_id, patch)
+
+    async def recording_list_processing(self):
+        return await self._call("recording_list_processing")
