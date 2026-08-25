@@ -105,6 +105,12 @@ def _table_metrics(
     source_rows: list[dict[str, Any]],
     target_rows: list[dict[str, Any]],
 ) -> TableVerification:
+    source_columns = set(source_rows[0]) if source_rows else set()
+    if source_columns:
+        target_rows = [
+            {key: row[key] for key in source_columns}
+            for row in target_rows
+        ]
     object_key_column = {
         "interview_report": "md_path",
         "recording": "tos_key",

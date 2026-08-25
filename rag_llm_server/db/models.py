@@ -113,6 +113,9 @@ class InterviewSession(Base):
     rtc_status: Mapped[str] = mapped_column(
         String(32), nullable=False, server_default=text("'created'")
     )
+    rtc_fencing_token: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, server_default=text("0")
+    )
     version: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("1"))
 
     __table_args__ = (

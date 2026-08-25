@@ -249,6 +249,7 @@ class PostgresRepository(PostgresAuthRepository):
             rtc_task_id=session.get("rtc_task_id", task_id),
             rtc_callback_id=session.get("rtc_callback_id", callback_id),
             rtc_status=session.get("rtc_status", "created"),
+            rtc_fencing_token=session.get("rtc_fencing_token", 0),
             version=session.get("version", 1),
         )
         self._session.add(model)
@@ -265,6 +266,42 @@ class PostgresRepository(PostgresAuthRepository):
                 InterviewSession.user_id == uuid.UUID(user_id),
             )
         )
+        return _row_dict(model) if model else None
+
+    async def session_claim_rtc_fence(
+        self, user_id: str, session_id: str, fencing_token: int
+    ) -> dict | None:
+        statement = (
+            update(InterviewSession)
+            .where(
+                InterviewSession.id == uuid.UUID(session_id),
+                InterviewSession.user_id == uuid.UUID(user_id),
+                InterviewSession.rtc_fencing_token < fencing_token,
+            )
+            .values(rtc_fencing_token=fencing_token)
+            .returning(InterviewSession)
+        )
+        model = await self._session.scalar(statement)
+        if model is None and await self.session_get(user_id, session_id):
+            raise StorageVersionConflictError("RTC fencing token conflict")
+        return _row_dict(model) if model else None
+
+    async def session_update_rtc_status(
+        self, user_id: str, session_id: str, rtc_status: str, fencing_token: int
+    ) -> dict | None:
+        statement = (
+            update(InterviewSession)
+            .where(
+                InterviewSession.id == uuid.UUID(session_id),
+                InterviewSession.user_id == uuid.UUID(user_id),
+                InterviewSession.rtc_fencing_token == fencing_token,
+            )
+            .values(rtc_status=rtc_status)
+            .returning(InterviewSession)
+        )
+        model = await self._session.scalar(statement)
+        if model is None and await self.session_get(user_id, session_id):
+            raise StorageVersionConflictError("RTC fencing token conflict")
         return _row_dict(model) if model else None
 
     async def session_get_internal(self, session_id: str) -> dict | None:
@@ -601,6 +638,22 @@ class PostgresStorage(BaseStorage):
     ):
         return await self._call(
             "session_update", user_id, session_id, patch, expected_version
+        )
+
+    async def session_claim_rtc_fence(self, user_id, session_id, fencing_token):
+        return await self._call(
+            "session_claim_rtc_fence", user_id, session_id, fencing_token
+        )
+
+    async def session_update_rtc_status(
+        self, user_id, session_id, rtc_status, fencing_token
+    ):
+        return await self._call(
+            "session_update_rtc_status",
+            user_id,
+            session_id,
+            rtc_status,
+            fencing_token,
         )
 
     async def session_list_running(self, user_id):

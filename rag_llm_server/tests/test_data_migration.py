@@ -30,8 +30,8 @@ async def _build_source(path: Path, prefix: str) -> dict[str, str]:
             (ids["resume"], ids["user"], "fixture", '{"skills":["python"]}', "fixture", "ready", "2026-01-01T00:01:00Z", "2026-01-01T00:01:00Z"),
         )
         connection.execute(
-            "INSERT INTO interview_session VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (ids["session"], ids["user"], ids["resume"], "engineer", "technical", "finished", "2026-01-01T00:02:00Z", "2026-01-01T00:03:00Z", f"{prefix}_room", f"{prefix}_rtc_user", f"{prefix}_task", f"{prefix}_callback", "finished", 1),
+            "INSERT INTO interview_session VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (ids["session"], ids["user"], ids["resume"], "engineer", "technical", "finished", "2026-01-01T00:02:00Z", "2026-01-01T00:03:00Z", f"{prefix}_room", f"{prefix}_rtc_user", f"{prefix}_task", f"{prefix}_callback", "finished", 0, 1),
         )
         connection.execute(
             "INSERT INTO message VALUES (?, ?, ?, ?, ?, ?)",

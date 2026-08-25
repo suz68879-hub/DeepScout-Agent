@@ -1,18 +1,20 @@
 """Tenant-bound RTC scene, token and Start/Stop OpenAPI orchestration."""
-import asyncio
 import time
 from typing import Any
 
 import httpx
 
 from config import settings
+from services.distributed_lock import DistributedLock, LockLost, RedisLease
 from services.interview_service import _restore_state, build_welcome_message
+from services.redis_client import get_redis
 from services.storage import storage
+from services.storage.base import StorageVersionConflictError
 from services.token_build import AccessToken, PRIVILEGES
 from services.utils import Signer
 
 AGENT_USER_ID = "AiAgent"
-_session_locks: dict[str, asyncio.Lock] = {}
+RTC_LOCK_WAIT_SECONDS = 2.0
 
 
 class RTCConfigurationError(RuntimeError):
@@ -117,11 +119,48 @@ async def build_voice_chat_body(
     return incoming_body
 
 
-def _idempotent_response(action: str) -> dict[str, Any]:
+def _idempotent_response(action: str, rtc_status: str | None = None) -> dict[str, Any]:
     return {
         "ResponseMetadata": {"Action": action},
-        "Result": {"Idempotent": True},
+        "Result": {"Idempotent": True, "RTCStatus": rtc_status},
     }
+
+
+def get_rtc_lock() -> DistributedLock:
+    return DistributedLock(get_redis(), settings.APP_ENV)
+
+
+async def _call_provider(
+    action: str | None,
+    version: str,
+    session: dict,
+    incoming_body: Any,
+    lease: RedisLease,
+) -> dict[str, Any]:
+    request_body = await build_voice_chat_body(action, session, incoming_body)
+    host = "rtc.volcengineapi.com"
+    request_data = {
+        "method": "POST",
+        "path": "/",
+        "params": {"Action": action, "Version": version},
+        "headers": {"Host": host, "Content-Type": "application/json"},
+        "body": request_body,
+    }
+    signer = Signer(request_data, "rtc")
+    signer.add_authorization({
+        "accessKeyId": settings.VOLC_AK,
+        "secretKey": settings.VOLC_SK,
+    })
+    url = f"https://{host}?Action={action}&Version={version}"
+    await lease.assert_owned()
+    async with httpx.AsyncClient() as client:
+        response = await client.post(
+            url,
+            headers=request_data["headers"],
+            json=request_body,
+            timeout=30.0,
+        )
+    return response.json()
 
 
 async def call_voice_chat_openapi(
@@ -131,50 +170,42 @@ async def call_voice_chat_openapi(
     incoming_body: Any,
 ) -> dict[str, Any]:
     if action == "StartVoiceChat" and session.get("rtc_status") == "running":
-        return _idempotent_response("StartVoiceChat")
+        return _idempotent_response("StartVoiceChat", "running")
     if action == "StopVoiceChat" and session.get("rtc_status") in {"created", "stopped"}:
-        return _idempotent_response("StopVoiceChat")
-    lock = _session_locks.setdefault(session["id"], asyncio.Lock())
-    async with lock:
+        return _idempotent_response("StopVoiceChat", session.get("rtc_status"))
+    async with get_rtc_lock().lease_wait(
+        session["id"], timeout=RTC_LOCK_WAIT_SECONDS
+    ) as lease:
         current = await storage.session_get(session["user_id"], session["id"])
-        current = current or session
+        if current is None:
+            raise LookupError("interview session not found")
         rtc_status = current.get("rtc_status", "created")
         if action == "StartVoiceChat" and rtc_status == "running":
-            return _idempotent_response("StartVoiceChat")
+            return _idempotent_response("StartVoiceChat", rtc_status)
         if action == "StopVoiceChat" and rtc_status in {"created", "stopped"}:
-            return _idempotent_response("StopVoiceChat")
+            return _idempotent_response("StopVoiceChat", rtc_status)
 
-        request_body = await build_voice_chat_body(action, current, incoming_body)
-        host = "rtc.volcengineapi.com"
-        request_data = {
-            "method": "POST",
-            "path": "/",
-            "params": {"Action": action, "Version": version},
-            "headers": {"Host": host, "Content-Type": "application/json"},
-            "body": request_body,
-        }
-        signer = Signer(request_data, "rtc")
-        signer.add_authorization({
-            "accessKeyId": settings.VOLC_AK,
-            "secretKey": settings.VOLC_SK,
-        })
-        url = f"https://{host}?Action={action}&Version={version}"
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                url,
-                headers=request_data["headers"],
-                json=request_body,
-                timeout=30.0,
+        try:
+            current = await storage.session_claim_rtc_fence(
+                current["user_id"], current["id"], lease.fencing_token
             )
-        payload = response.json()
+        except StorageVersionConflictError as exc:
+            raise LockLost("RTC fencing token was superseded") from exc
+        if current is None:
+            raise LookupError("interview session not found")
+        await lease.assert_owned()
+        payload = await _call_provider(action, version, current, incoming_body, lease)
         if not payload.get("ResponseMetadata", {}).get("Error"):
             target = "running" if action == "StartVoiceChat" else "stopped"
             if action in {"StartVoiceChat", "StopVoiceChat"}:
-                await storage.session_update(
-                    current["user_id"], current["id"], {"rtc_status": target},
-                )
+                await lease.assert_owned()
+                try:
+                    await storage.session_update_rtc_status(
+                        current["user_id"],
+                        current["id"],
+                        target,
+                        lease.fencing_token,
+                    )
+                except StorageVersionConflictError as exc:
+                    raise LockLost("RTC fencing token was superseded") from exc
         return payload
-
-
-def clear_rtc_locks() -> None:
-    _session_locks.clear()

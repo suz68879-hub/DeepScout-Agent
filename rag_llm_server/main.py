@@ -23,7 +23,6 @@ from logging_config import configure_logging
 from middleware.request_context import RequestContextMiddleware
 from services.interview_service import shutdown_cold_tasks
 from services.redis_client import close_redis, init_redis
-from services.rtc_service import clear_rtc_locks
 from services.storage import close_storage, init_storage
 
 logger = logging.getLogger(__name__)
@@ -64,7 +63,6 @@ async def lifespan(_app: FastAPI):
         yield
     finally:
         await shutdown_cold_tasks()
-        clear_rtc_locks()
         await close_graph()
         await close_redis()
         await close_storage()

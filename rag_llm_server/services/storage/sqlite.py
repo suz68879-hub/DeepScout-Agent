@@ -50,6 +50,7 @@ CREATE TABLE IF NOT EXISTS interview_session (
   rtc_task_id TEXT NOT NULL UNIQUE,
   rtc_callback_id TEXT NOT NULL UNIQUE,
   rtc_status TEXT NOT NULL DEFAULT 'created',
+  rtc_fencing_token INTEGER NOT NULL DEFAULT 0,
   version INTEGER NOT NULL DEFAULT 1
 );
 CREATE TABLE IF NOT EXISTS message (
@@ -139,6 +140,9 @@ class SqliteStorage(BaseStorage):
             )
             await self._add_column(
                 "interview_session", "version", "INTEGER NOT NULL DEFAULT 1",
+            )
+            await self._add_column(
+                "interview_session", "rtc_fencing_token", "INTEGER NOT NULL DEFAULT 0",
             )
 
             session_rows = await (
@@ -411,13 +415,16 @@ class SqliteStorage(BaseStorage):
         row.setdefault("rtc_task_id", task_id)
         row.setdefault("rtc_callback_id", callback_id)
         row.setdefault("rtc_status", "created")
+        row.setdefault("rtc_fencing_token", 0)
         row.setdefault("version", 1)
         row["user_id"] = user_id
         await self._c().execute(
             "INSERT INTO interview_session (id, user_id, resume_id, position, stage, status, "
-            "started_at, ended_at, rtc_room_id, rtc_user_id, rtc_task_id, rtc_callback_id, rtc_status, version) "
+            "started_at, ended_at, rtc_room_id, rtc_user_id, rtc_task_id, rtc_callback_id, "
+            "rtc_status, rtc_fencing_token, version) "
             "VALUES (:id, :user_id, :resume_id, :position, :stage, :status, :started_at, :ended_at, "
-            ":rtc_room_id, :rtc_user_id, :rtc_task_id, :rtc_callback_id, :rtc_status, :version)", row,
+            ":rtc_room_id, :rtc_user_id, :rtc_task_id, :rtc_callback_id, :rtc_status, "
+            ":rtc_fencing_token, :version)", row,
         )
         await self._c().commit()
         return row
@@ -463,6 +470,36 @@ class SqliteStorage(BaseStorage):
         if expected_version is not None and cursor.rowcount == 0:
             if await self.session_get(user_id, session_id):
                 raise StorageVersionConflictError("session version conflict")
+            return None
+        await self._c().commit()
+        return await self.session_get(user_id, session_id)
+
+    async def session_claim_rtc_fence(
+        self, user_id: str, session_id: str, fencing_token: int
+    ) -> dict | None:
+        cursor = await self._c().execute(
+            "UPDATE interview_session SET rtc_fencing_token = ? "
+            "WHERE id = ? AND user_id = ? AND rtc_fencing_token < ?",
+            (fencing_token, session_id, user_id, fencing_token),
+        )
+        if cursor.rowcount == 0:
+            if await self.session_get(user_id, session_id):
+                raise StorageVersionConflictError("RTC fencing token conflict")
+            return None
+        await self._c().commit()
+        return await self.session_get(user_id, session_id)
+
+    async def session_update_rtc_status(
+        self, user_id: str, session_id: str, rtc_status: str, fencing_token: int
+    ) -> dict | None:
+        cursor = await self._c().execute(
+            "UPDATE interview_session SET rtc_status = ? "
+            "WHERE id = ? AND user_id = ? AND rtc_fencing_token = ?",
+            (rtc_status, session_id, user_id, fencing_token),
+        )
+        if cursor.rowcount == 0:
+            if await self.session_get(user_id, session_id):
+                raise StorageVersionConflictError("RTC fencing token conflict")
             return None
         await self._c().commit()
         return await self.session_get(user_id, session_id)

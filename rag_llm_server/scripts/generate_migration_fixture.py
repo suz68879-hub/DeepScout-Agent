@@ -80,7 +80,7 @@ def generate_fixture(output: Path | str, users: int = 25) -> dict[str, int]:
                 report_id = _id("report", ordinal)
                 recording_id = _id("recording", ordinal)
                 connection.execute(
-                    "INSERT INTO interview_session VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "INSERT INTO interview_session VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         session_id,
                         user_id,
@@ -95,6 +95,7 @@ def generate_fixture(output: Path | str, users: int = 25) -> dict[str, int]:
                         f"synthetic-task-{ordinal}",
                         f"synthetic-callback-{ordinal}",
                         "finished",
+                        0,
                         1,
                     ),
                 )

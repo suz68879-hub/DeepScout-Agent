@@ -159,6 +159,17 @@ class DistributedLock:
     @asynccontextmanager
     async def lease(self, resource_id: str):
         lease = await self.acquire(resource_id)
+        async with self._hold(lease):
+            yield lease
+
+    @asynccontextmanager
+    async def lease_wait(self, resource_id: str, *, timeout: float):
+        lease = await self.acquire_wait(resource_id, timeout=timeout)
+        async with self._hold(lease):
+            yield lease
+
+    @asynccontextmanager
+    async def _hold(self, lease: RedisLease):
         renew_task = asyncio.create_task(self._renew_loop(lease))
         try:
             yield lease

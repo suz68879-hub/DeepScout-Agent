@@ -1,7 +1,11 @@
 """RTC router compatibility tests for explicit interview sessions."""
 import json
 
+import pytest
+
 import api.rtc as rtc_api
+from services.distributed_lock import LockBusy, LockLost
+from services.redis_client import SharedStateUnavailable
 
 
 USER = {"id": "u1", "username": "alice"}
@@ -55,6 +59,35 @@ async def test_proxy_uses_server_side_session_identifiers(monkeypatch):
     body = rtc_api.ProxyRequest(SessionId="s1", SceneID="scene")
     assert await rtc_api.proxy(request, body, USER) == {"ok": True}
     assert calls == [("StopVoiceChat", "v1", SESSION, {"SessionId": "s1", "SceneID": "scene"})]
+
+
+@pytest.mark.parametrize(
+    ("error", "status_code", "detail"),
+    [
+        (LockBusy("busy"), 409, "RTC session is busy; retry the request"),
+        (LockLost("lost"), 409, "RTC session lock was lost; retry the request"),
+        (SharedStateUnavailable("unavailable"), 503, "shared state unavailable"),
+    ],
+)
+async def test_proxy_maps_shared_lock_failures_without_leaking_details(
+    monkeypatch, error, status_code, detail,
+):
+    monkeypatch.setattr(rtc_api.storage, "session_get", lambda *args: async_value(SESSION))
+
+    async def fail(*_args, **_kwargs):
+        raise error
+
+    monkeypatch.setattr(rtc_api, "call_voice_chat_openapi", fail)
+    with pytest.raises(rtc_api.HTTPException) as exc_info:
+        await rtc_api.proxy(
+            Request({}, Action="StartVoiceChat"),
+            rtc_api.ProxyRequest(SessionId="s1"),
+            USER,
+        )
+    assert exc_info.value.status_code == status_code
+    assert exc_info.value.detail == detail
+    if status_code == 409:
+        assert exc_info.value.headers["Retry-After"] in {"1", "2"}
 
 
 async def test_callback_rejects_invalid_signature_when_secret_is_configured(monkeypatch):

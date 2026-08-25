@@ -52,6 +52,8 @@ def test_schema_has_required_uniqueness_and_owner_indexes():
     } <= session_unique_names
     assert "version" in session.c
     assert session.c.version.nullable is False
+    assert "rtc_fencing_token" in session.c
+    assert session.c.rtc_fencing_token.nullable is False
 
     message = metadata.tables["message"]
     message_unique_columns = {

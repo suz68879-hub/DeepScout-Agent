@@ -49,10 +49,11 @@ async def _write_batch(
     engine: AsyncEngine, spec: TableSpec, rows: list[dict]
 ) -> None:
     statement = insert(spec.table).values(rows)
+    source_columns = set(rows[0])
     updates = {
         column.name: statement.excluded[column.name]
         for column in spec.table.columns
-        if column.name != spec.primary_key
+        if column.name != spec.primary_key and column.name in source_columns
     }
     statement = statement.on_conflict_do_update(
         index_elements=[spec.table.c[spec.primary_key]],

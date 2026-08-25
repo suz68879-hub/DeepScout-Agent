@@ -64,6 +64,14 @@ class BaseStorage(ABC):
         expected_version: int | None = None,
     ) -> dict | None: ...
     @abstractmethod
+    async def session_claim_rtc_fence(
+        self, user_id: str, session_id: str, fencing_token: int
+    ) -> dict | None: ...
+    @abstractmethod
+    async def session_update_rtc_status(
+        self, user_id: str, session_id: str, rtc_status: str, fencing_token: int
+    ) -> dict | None: ...
+    @abstractmethod
     async def session_list_running(self, user_id: str) -> list[dict]: ...
 
     # message
