@@ -136,7 +136,12 @@ async def chat_callback(request: Request, rtc_callback_id: str | None = None):
             "messages": [{"role": "assistant", "content": full}],
             "pending_user_text": "",
         }, as_node="interviewer")
-        schedule_cold_path(session["id"])
+        latest_state = dict((await graph.aget_state(config)).values or {})
+        await schedule_cold_path(
+            session["id"],
+            session["user_id"],
+            len(latest_state.get("messages", [])),
+        )
         yield "data: [DONE]\n\n"
 
     return StreamingResponse(

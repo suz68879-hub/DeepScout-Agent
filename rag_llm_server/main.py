@@ -22,7 +22,6 @@ from db import close_database, init_database
 from logging_config import configure_logging
 from middleware.request_context import RequestContextMiddleware
 from middleware.idempotency import IdempotencyKeyMiddleware
-from services.interview_service import shutdown_cold_tasks
 from services.redis_client import check_redis_readiness, close_redis, init_redis
 from services.storage import close_storage, init_storage
 
@@ -63,7 +62,6 @@ async def lifespan(_app: FastAPI):
             logger.error("Recording recovery scan failed error_type=%s", type(exc).__name__)
         yield
     finally:
-        await shutdown_cold_tasks()
         await close_graph()
         await close_redis()
         await close_storage()

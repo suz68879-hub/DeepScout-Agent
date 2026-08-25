@@ -72,7 +72,6 @@ async def test_lifespan_initializes_and_closes_resources(monkeypatch):
     monkeypatch.setattr(main, "init_storage", lambda: record("init_storage"))
     monkeypatch.setattr(main, "init_redis", lambda: record("init_redis"))
     monkeypatch.setattr(main, "init_graph", lambda: record("init_graph"))
-    monkeypatch.setattr(main, "shutdown_cold_tasks", lambda: record("shutdown_cold_tasks"))
     monkeypatch.setattr(main, "close_graph", lambda: record("close_graph"))
     monkeypatch.setattr(main, "close_storage", lambda: record("close_storage"))
     monkeypatch.setattr(main, "close_redis", lambda: record("close_redis"))
@@ -83,7 +82,7 @@ async def test_lifespan_initializes_and_closes_resources(monkeypatch):
         assert events == ["init_redis", "init_storage", "init_graph"]
 
     assert events == [
-        "init_redis", "init_storage", "init_graph", "shutdown_cold_tasks", "close_graph",
+        "init_redis", "init_storage", "init_graph", "close_graph",
         "close_redis", "close_storage",
     ]
 
@@ -99,7 +98,6 @@ async def test_lifespan_closes_redis_when_startup_fails(monkeypatch):
 
     monkeypatch.setattr(main, "init_redis", lambda: record("init_redis"))
     monkeypatch.setattr(main, "init_storage", fail_storage)
-    monkeypatch.setattr(main, "shutdown_cold_tasks", lambda: record("shutdown_cold_tasks"))
     monkeypatch.setattr(main, "close_graph", lambda: record("close_graph"))
     monkeypatch.setattr(main, "close_redis", lambda: record("close_redis"))
     monkeypatch.setattr(main, "close_storage", lambda: record("close_storage"))
@@ -109,5 +107,5 @@ async def test_lifespan_closes_redis_when_startup_fails(monkeypatch):
             pass
 
     assert events == [
-        "init_redis", "shutdown_cold_tasks", "close_graph", "close_redis", "close_storage",
+        "init_redis", "close_graph", "close_redis", "close_storage",
     ]

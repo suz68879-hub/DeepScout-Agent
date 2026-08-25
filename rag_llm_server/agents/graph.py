@@ -1,9 +1,9 @@
 """LangGraph 图组装（spec §5.1 / agent-designs §0.2）。
 
 热路径：chat_callback 恢复状态 → ainvoke 运行 interviewer 节点（占位）
-并以 interrupt_after=["interviewer"] 中断。
-冷路径：回合结束后 ainvoke(None, config) 从 interviewer 之后恢复执行
-evaluator → planner → 条件边（finish → reporter / 否则 END 等待下一轮回调）。
+并在 interviewer 后中断。
+冷路径：worker 从 interviewer 之后逐 checkpoint 恢复 evaluator、planner，
+必要时继续 reporter；每个冷节点后再次中断以便重读业务库和图状态。
 
 Ruling R5：interviewer 节点在图内为占位——真实 LLM 流式生成在 HTTP 层执行
 （interview_service），以持有流式生成器；状态写入经 aupdate_state 完成，
@@ -42,6 +42,10 @@ _checkpoint_conn: aiosqlite.Connection | None = None
 _checkpoint_pool: AsyncConnectionPool | None = None
 _graph = None
 logger = logging.getLogger(__name__)
+
+
+class ColdPathOutputError(Exception):
+    """模型输出经过既定重试后仍不可用，禁止任务自动重试。"""
 
 
 class _DaemonConnection(aiosqlite.Connection):
@@ -117,6 +121,8 @@ async def evaluator_node(state: InterviewState) -> dict:
         llm=get_agent_llm("evaluator"),
         prompt_versions=state.get("prompt_versions"),
     )
+    if score.get("status") == "failed":
+        raise ColdPathOutputError("EVALUATOR_OUTPUT_INVALID")
     return {
         "scores": state.get("scores", []) + [score],
         "round_no": round_no,
@@ -174,7 +180,10 @@ async def build_graph():
         {"wait": END, "reporter": "reporter"},
     )
     builder.add_edge("reporter", END)
-    return builder.compile(checkpointer=await make_checkpointer(), interrupt_after=["interviewer"])
+    return builder.compile(
+        checkpointer=await make_checkpointer(),
+        interrupt_after=["interviewer", "evaluator", "planner", "reporter"],
+    )
 
 
 async def init_graph():

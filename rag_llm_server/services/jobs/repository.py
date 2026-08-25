@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import case, func, select, update
+from sqlalchemy import and_, case, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -91,6 +91,51 @@ class JobRepository:
             )
         )
         return _record(model) if model else None
+
+    async def get_internal(self, job_id: uuid.UUID | str) -> JobRecord | None:
+        model = await self._session.get(BackgroundJob, _as_uuid(job_id))
+        return _record(model) if model else None
+
+    async def latest_for_session(
+        self, session_id: uuid.UUID | str
+    ) -> JobRecord | None:
+        model = await self._session.scalar(
+            select(BackgroundJob)
+            .where(
+                BackgroundJob.job_type == "interview.finish",
+                BackgroundJob.payload_ref["session_id"].astext
+                == str(_as_uuid(session_id)),
+            )
+            .order_by(BackgroundJob.created_at.desc(), BackgroundJob.id.desc())
+            .limit(1)
+        )
+        return _record(model) if model else None
+
+    async def has_unfinished_predecessor(self, job: JobRecord) -> bool:
+        session_id = job.payload_ref.get("session_id")
+        if not isinstance(session_id, str):
+            raise ValueError("interview job is missing session_id")
+        predecessor = await self._session.scalar(
+            select(BackgroundJob.id)
+            .where(
+                BackgroundJob.id != job.id,
+                BackgroundJob.owner_id == job.owner_id,
+                BackgroundJob.job_type == job.job_type,
+                BackgroundJob.payload_ref["session_id"].astext == session_id,
+                BackgroundJob.status.in_(
+                    [JobStatus.PENDING.value, JobStatus.RUNNING.value]
+                ),
+                or_(
+                    BackgroundJob.created_at < job.created_at,
+                    and_(
+                        BackgroundJob.created_at == job.created_at,
+                        BackgroundJob.id < job.id,
+                    ),
+                ),
+            )
+            .limit(1)
+        )
+        return predecessor is not None
 
     async def claim(
         self,

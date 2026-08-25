@@ -98,6 +98,7 @@
 
 ### P3-T06 迁移面试冷路径任务
 
+- **实施状态**：已完成；冷路径改为 Job+Outbox/Celery 持久执行，逐节点 checkpoint 恢复、同会话串行、重复投递/worker 重启/报告唯一性及进程内 task 清理验证通过；后端 549 passed、17 skipped，覆盖率 83.06%（门槛 81%）。
 - **依赖/并行**：检查点 B。**规模/角色**：M，后端/Agent。
 - **预计文件**：`rag_llm_server/services/interview_service.py`、`rag_llm_server/tasks/interview_tasks.py`、`rag_llm_server/agents/graph.py`、`rag_llm_server/tests/test_interview_service.py`、`rag_llm_server/tests/test_interview_tasks.py`。
 - **契约与步骤**：Evaluator/Planner/Reporter 冷路径以 session_id/job_id 执行；handler 每步读取最新 PG/checkpoint，写入用状态/唯一约束；删除 `_cold_tasks` 和 shutdown gather。

@@ -1,7 +1,17 @@
-"""interview_service 冷路径调度测试（Task 13 修复轮 R1 起；T15 将扩展本文件）。"""
-import asyncio
+"""interview_service 热路径与持久冷任务调度测试。"""
+import os
+import inspect
+import uuid
+
+import pytest
+from dotenv import load_dotenv
+from sqlalchemy import delete, func, select
 
 import services.interview_service as isv
+from config import Config
+from db.engine import build_database_runtime
+from db.models import AppUser, BackgroundJob, InterviewSession, OutboxEvent
+from services.jobs.types import JobStatus
 
 
 def test_welcome_message_proactively_starts_self_introduction_for_position():
@@ -11,30 +21,266 @@ def test_welcome_message_proactively_starts_self_introduction_for_position():
     assert "课程顾问" not in message
 
 
-async def test_serialized_cold_finally_keeps_newer_task(monkeypatch):
-    """三方重叠竞态回归：旧任务的 finally 不得误删已被替换的 newer 条目（R-T13-4）。
+@pytest.fixture
+async def interview_job_runtime(monkeypatch):
+    load_dotenv()
+    if not os.getenv("DATABASE_URL"):
+        pytest.skip("DATABASE_URL is required for interview job tests")
+    monkeypatch.setenv("APP_ENV", "test")
+    monkeypatch.setenv("STORAGE_BACKEND", "postgres")
+    runtime = build_database_runtime(Config())
+    await runtime.start()
+    owner_id = uuid.uuid4()
+    session_id = uuid.uuid4()
+    async with runtime.session_scope() as session:
+        session.add(
+            AppUser(
+                id=owner_id,
+                username=f"interview_job_{owner_id.hex}",
+                password_hash="test-only",
+            )
+        )
+        session.add(
+            InterviewSession(
+                id=session_id,
+                user_id=owner_id,
+                position="Java后端",
+                stage="technical",
+                status="running",
+                rtc_room_id=f"room-{session_id}",
+                rtc_user_id=f"user-{session_id}",
+                rtc_task_id=f"task-{session_id}",
+                rtc_callback_id=f"callback-{session_id}",
+            )
+        )
+    try:
+        yield runtime, owner_id, session_id
+    finally:
+        async with runtime.session_scope() as session:
+            await session.execute(delete(AppUser).where(AppUser.id == owner_id))
+        await runtime.close()
 
-    无条件 pop 时：task1 finally 会删掉 dict 中已被 task2 替换的条目，
-    使后续回调的 await_pending_cold 落空 → 并发冷跑静默丢状态。
-    """
-    entered = asyncio.Event()
-    release = asyncio.Event()
 
-    async def fake_run_cold_path(session_id):
-        entered.set()  # 包装任务已进入 _serialized_cold 函数体
-        await release.wait()
+async def test_enqueue_cold_path_is_idempotent_per_checkpoint_trigger(
+    interview_job_runtime,
+):
+    runtime, owner_id, session_id = interview_job_runtime
+    async with runtime.session_scope() as session:
+        first = await isv.enqueue_cold_path(
+            session,
+            owner_id=owner_id,
+            session_id=session_id,
+            trigger_id=2,
+        )
+        repeated = await isv.enqueue_cold_path(
+            session,
+            owner_id=owner_id,
+            session_id=session_id,
+            trigger_id=2,
+        )
+        next_round = await isv.enqueue_cold_path(
+            session,
+            owner_id=owner_id,
+            session_id=session_id,
+            trigger_id=4,
+        )
 
-    monkeypatch.setattr(isv, "run_cold_path", fake_run_cold_path)
-    sid = "s-race"
-    isv.schedule_cold_path(sid)
-    wrapped = isv._cold_tasks.get(sid)
-    await entered.wait()  # 确定性暂停在函数体内，打开重叠窗口
-    newer = asyncio.current_task()  # 测试协程自身：模拟更晚到达的调度替换
-    isv._cold_tasks[sid] = newer
-    release.set()
-    await wrapped  # 旧任务 finally 执行：身份守卫不得误删 newer
-    assert isv._cold_tasks.get(sid) is newer
-    isv._cold_tasks.pop(sid, None)  # 清理模块级字典，防跨测试污染
+    assert repeated.id == first.id
+    assert next_round.id != first.id
+    assert first.payload_ref == {
+        "schema_version": 1,
+        "session_id": str(session_id),
+        "step": "round",
+    }
+    async with runtime.session_scope() as session:
+        assert await session.scalar(
+            select(func.count())
+            .select_from(BackgroundJob)
+            .where(BackgroundJob.owner_id == owner_id)
+        ) == 2
+        assert await session.scalar(
+            select(func.count())
+            .select_from(OutboxEvent)
+            .join(BackgroundJob, BackgroundJob.id == OutboxEvent.aggregate_id)
+            .where(BackgroundJob.owner_id == owner_id)
+        ) == 2
+
+
+@pytest.mark.parametrize("trigger_id", [0, -1, "messages"])
+async def test_enqueue_cold_path_rejects_invalid_trigger_before_database(trigger_id):
+    with pytest.raises(isv.ColdPathStateError, match="INVALID_COLD_PATH_TRIGGER"):
+        await isv.enqueue_cold_path(
+            None,
+            owner_id=uuid.uuid4(),
+            session_id=uuid.uuid4(),
+            trigger_id=trigger_id,
+        )
+
+
+async def test_enqueue_cold_path_rejects_cross_owner_session(interview_job_runtime):
+    runtime, _, session_id = interview_job_runtime
+    async with runtime.session_scope() as session:
+        with pytest.raises(isv.ColdPathStateError, match="INTERVIEW_SESSION_NOT_FOUND"):
+            await isv.enqueue_cold_path(
+                session,
+                owner_id=uuid.uuid4(),
+                session_id=session_id,
+                trigger_id=2,
+            )
+
+
+def test_interview_service_has_no_process_local_cold_task_registry():
+    assert not hasattr(isv, "_cold_tasks")
+    assert not hasattr(isv, "shutdown_cold_tasks")
+    assert "asyncio.create_task" not in inspect.getsource(isv)
+
+
+async def test_await_pending_cold_observes_persisted_terminal_state(monkeypatch):
+    states = iter([JobStatus.PENDING, JobStatus.RUNNING, JobStatus.SUCCEEDED])
+    sleeps = []
+
+    async def latest(_session_id):
+        return type("Job", (), {"status": next(states)})()
+
+    async def no_sleep(delay):
+        sleeps.append(delay)
+
+    monkeypatch.setattr(isv, "_latest_cold_job", latest, raising=False)
+    monkeypatch.setattr(isv.asyncio, "sleep", no_sleep)
+
+    await isv.await_pending_cold("session-1", timeout=1, poll_interval=0.01)
+
+    assert sleeps == [0.01, 0.01]
+
+
+@pytest.mark.parametrize("status", [JobStatus.FAILED, JobStatus.CANCELLED])
+async def test_await_pending_cold_rejects_failed_predecessor(monkeypatch, status):
+    async def latest(_session_id):
+        return type("Job", (), {"status": status})()
+
+    monkeypatch.setattr(isv, "_latest_cold_job", latest, raising=False)
+
+    with pytest.raises(isv.ColdPathStateError, match="PREVIOUS_COLD_PATH_FAILED"):
+        await isv.await_pending_cold("session-1", timeout=0)
+
+
+async def test_run_cold_path_rereads_session_and_checkpoint_before_each_step(
+    monkeypatch,
+):
+    session_reads = []
+    graph_reads = []
+    invokes = []
+    versions = iter([1, 2, 3])
+
+    class FakeStorage:
+        async def session_get_internal(self, session_id):
+            session_reads.append(session_id)
+            return {
+                "id": session_id,
+                "user_id": "11111111-1111-1111-1111-111111111111",
+                "stage": "technical",
+                "version": next(versions),
+            }
+
+        async def session_update(
+            self, user_id, session_id, patch, expected_version=None
+        ):
+            return {
+                "id": session_id,
+                "user_id": user_id,
+                "stage": patch["stage"],
+                "version": expected_version + 1,
+            }
+
+    class FakeGraph:
+        nodes = [("evaluator",), ("planner",), ()]
+        current = 0
+
+        async def aget_state(self, _config):
+            graph_reads.append(True)
+            return type("Snapshot", (), {
+                "values": {
+                    "session_id": "22222222-2222-2222-2222-222222222222",
+                    "stage": "technical",
+                    "report": None,
+                },
+                "next": self.nodes[self.current],
+            })()
+
+        async def ainvoke(self, _input, _config):
+            invokes.append(True)
+            self.current += 1
+
+    job = type("Job", (), {
+        "id": uuid.uuid4(),
+        "owner_id": uuid.UUID("11111111-1111-1111-1111-111111111111"),
+        "payload_ref": {
+            "session_id": "22222222-2222-2222-2222-222222222222"
+        },
+    })()
+    monkeypatch.setattr(isv, "storage", FakeStorage())
+    monkeypatch.setattr(isv, "get_graph", lambda: FakeGraph())
+
+    result = await isv.run_cold_path(job)
+
+    assert result == {
+        "schema_version": 1,
+        "session_id": "22222222-2222-2222-2222-222222222222",
+    }
+    assert len(session_reads) == 3
+    assert len(invokes) == 2
+    assert len(graph_reads) == 5
+
+
+async def test_run_cold_path_reconciles_stage_after_checkpoint_only_crash(
+    monkeypatch,
+):
+    updates = []
+    session_id = "22222222-2222-2222-2222-222222222222"
+    owner_id = uuid.UUID("11111111-1111-1111-1111-111111111111")
+
+    class FakeStorage:
+        async def session_get_internal(self, _session_id):
+            return {
+                "id": session_id,
+                "user_id": str(owner_id),
+                "stage": "technical",
+                "version": 7,
+            }
+
+        async def session_update(
+            self, user_id, _session_id, patch, expected_version=None
+        ):
+            updates.append((user_id, patch, expected_version))
+            return {
+                "id": session_id,
+                "user_id": user_id,
+                "stage": patch["stage"],
+                "version": expected_version + 1,
+            }
+
+    class FakeGraph:
+        async def aget_state(self, _config):
+            return type("Snapshot", (), {
+                "values": {
+                    "session_id": session_id,
+                    "stage": "deepdive",
+                    "report": None,
+                },
+                "next": (),
+            })()
+
+    job = type("Job", (), {
+        "id": uuid.uuid4(),
+        "owner_id": owner_id,
+        "payload_ref": {"session_id": session_id},
+    })()
+    monkeypatch.setattr(isv, "storage", FakeStorage())
+    monkeypatch.setattr(isv, "get_graph", lambda: FakeGraph())
+
+    await isv.run_cold_path(job)
+
+    assert updates == [(str(owner_id), {"stage": "deepdive"}, 7)]
 
 
 async def test_restore_state_initializes_all_14_fields(monkeypatch):
