@@ -23,6 +23,21 @@ if not database_url.startswith("postgresql+psycopg://"):
 config.set_main_option("sqlalchemy.url", database_url.replace("%", "%%"))
 
 target_metadata = Base.metadata
+EXTERNAL_TABLES = {
+    "checkpoint_migrations",
+    "checkpoints",
+    "checkpoint_blobs",
+    "checkpoint_writes",
+}
+
+
+def include_object(obj, name, type_, reflected, compare_to) -> bool:
+    del reflected, compare_to
+    if type_ == "table" and name in EXTERNAL_TABLES:
+        return False
+    if type_ == "index" and getattr(getattr(obj, "table", None), "name", None) in EXTERNAL_TABLES:
+        return False
+    return True
 
 
 def run_migrations_offline() -> None:
@@ -33,6 +48,7 @@ def run_migrations_offline() -> None:
         dialect_opts={"paramstyle": "named"},
         compare_type=True,
         compare_server_default=True,
+        include_object=include_object,
     )
     with context.begin_transaction():
         context.run_migrations()
@@ -44,6 +60,7 @@ def do_run_migrations(connection) -> None:
         target_metadata=target_metadata,
         compare_type=True,
         compare_server_default=True,
+        include_object=include_object,
     )
     with context.begin_transaction():
         context.run_migrations()
