@@ -197,6 +197,7 @@ class InterviewReport(Base):
             ondelete="RESTRICT",
         ),
         UniqueConstraint("id", "user_id", name="uq_interview_report_id_user_id"),
+        UniqueConstraint("session_id", name="uq_interview_report_session_id"),
         Index("ix_interview_report_user_created_id", user_id, created_at.desc(), id.desc()),
     )
 

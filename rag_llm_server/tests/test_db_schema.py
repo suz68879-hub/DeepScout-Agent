@@ -61,6 +61,14 @@ def test_schema_has_required_uniqueness_and_owner_indexes():
     }
     assert ("session_id", "seq") in message_unique_columns
 
+    report = metadata.tables["interview_report"]
+    report_unique_columns = {
+        tuple(column.name for column in constraint.columns)
+        for constraint in report.constraints
+        if isinstance(constraint, UniqueConstraint)
+    }
+    assert ("session_id",) in report_unique_columns
+
     expected_indexes = {
         "ix_resume_user_created_id",
         "ix_interview_session_user_started_id",

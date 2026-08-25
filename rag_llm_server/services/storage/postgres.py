@@ -7,7 +7,15 @@ from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from db.models import AppUser, AuthSession, InterviewSession, Message, Resume
+from db.models import (
+    AppUser,
+    AuthSession,
+    InterviewReport,
+    InterviewSession,
+    Message,
+    Recording,
+    Resume,
+)
 from services.storage.base import StorageConflictError, StorageVersionConflictError
 
 
@@ -120,6 +128,18 @@ class PostgresAuthRepository:
 class PostgresRepository(PostgresAuthRepository):
     RESUME_COLS = {"content", "structured_json", "source", "status"}
     SESSION_COLS = {"resume_id", "position", "stage", "status", "ended_at", "rtc_status"}
+    RECORDING_COLS = {
+        "filename",
+        "ext",
+        "tos_key",
+        "size_bytes",
+        "status",
+        "asr_task_id",
+        "transcript_json",
+        "error",
+        "report_id",
+        "finished_at",
+    }
 
     async def resume_create(self, user_id: str, resume: dict) -> dict:
         now = datetime.now(timezone.utc)
@@ -322,3 +342,126 @@ class PostgresRepository(PostgresAuthRepository):
             )
         ).all()
         return [_row_dict(model) for model in models]
+
+    async def report_create(self, user_id: str, report: dict) -> dict:
+        if report.get("session_id") and not await self.session_get(user_id, report["session_id"]):
+            raise ValueError("session does not belong to user")
+        model = InterviewReport(
+            id=uuid.UUID(report["id"]) if report.get("id") else uuid.uuid4(),
+            user_id=uuid.UUID(user_id),
+            session_id=uuid.UUID(report["session_id"]) if report.get("session_id") else None,
+            scores_json=_json_load(report.get("scores_json")),
+            feedback_json=_json_load(report.get("feedback_json")),
+            suggestions_json=_json_load(report.get("suggestions_json")),
+            position=report.get("position"),
+            source=report.get("source", "session"),
+            md_path=report.get("md_path"),
+            created_at=_optional_datetime(report.get("created_at"))
+            or datetime.now(timezone.utc),
+        )
+        self._session.add(model)
+        try:
+            await self._session.flush()
+        except IntegrityError:
+            raise StorageConflictError("report already exists for session") from None
+        return _row_dict(
+            model, {"scores_json", "feedback_json", "suggestions_json"}
+        )
+
+    async def report_get(self, user_id: str, report_id: str) -> dict | None:
+        model = await self._session.scalar(
+            select(InterviewReport).where(
+                InterviewReport.id == uuid.UUID(report_id),
+                InterviewReport.user_id == uuid.UUID(user_id),
+            )
+        )
+        return (
+            _row_dict(model, {"scores_json", "feedback_json", "suggestions_json"})
+            if model
+            else None
+        )
+
+    async def report_list(self, user_id: str) -> list[dict]:
+        models = (
+            await self._session.scalars(
+                select(InterviewReport)
+                .where(InterviewReport.user_id == uuid.UUID(user_id))
+                .order_by(InterviewReport.created_at.desc(), InterviewReport.id.desc())
+            )
+        ).all()
+        return [
+            _row_dict(model, {"scores_json", "feedback_json", "suggestions_json"})
+            for model in models
+        ]
+
+    async def recording_create(self, user_id: str, recording: dict) -> dict:
+        if recording.get("report_id") and not await self.report_get(
+            user_id, recording["report_id"]
+        ):
+            raise ValueError("report does not belong to user")
+        model = Recording(
+            id=uuid.UUID(recording["id"]) if recording.get("id") else uuid.uuid4(),
+            user_id=uuid.UUID(user_id),
+            filename=recording.get("filename"),
+            ext=recording.get("ext"),
+            tos_key=recording.get("tos_key"),
+            size_bytes=recording.get("size_bytes"),
+            status=recording.get("status", "processing"),
+            asr_task_id=recording.get("asr_task_id"),
+            transcript_json=_json_load(recording.get("transcript_json")),
+            error=recording.get("error"),
+            report_id=uuid.UUID(recording["report_id"]) if recording.get("report_id") else None,
+            created_at=_optional_datetime(recording.get("created_at"))
+            or datetime.now(timezone.utc),
+            finished_at=_optional_datetime(recording.get("finished_at")),
+        )
+        self._session.add(model)
+        await self._session.flush()
+        return _row_dict(model, {"transcript_json"})
+
+    async def recording_get(self, user_id: str, recording_id: str) -> dict | None:
+        model = await self._session.scalar(
+            select(Recording).where(
+                Recording.id == uuid.UUID(recording_id),
+                Recording.user_id == uuid.UUID(user_id),
+            )
+        )
+        return _row_dict(model, {"transcript_json"}) if model else None
+
+    async def recording_get_internal(self, recording_id: str) -> dict | None:
+        model = await self._session.get(Recording, uuid.UUID(recording_id))
+        return _row_dict(model, {"transcript_json"}) if model else None
+
+    async def recording_update(
+        self, user_id: str, recording_id: str, patch: dict
+    ) -> dict | None:
+        values = {key: patch[key] for key in patch if key in self.RECORDING_COLS}
+        if "report_id" in values and values["report_id"] is not None:
+            if not await self.report_get(user_id, values["report_id"]):
+                raise ValueError("report does not belong to user")
+            values["report_id"] = uuid.UUID(values["report_id"])
+        if "transcript_json" in values:
+            values["transcript_json"] = _json_load(values["transcript_json"])
+        if "finished_at" in values:
+            values["finished_at"] = _optional_datetime(values["finished_at"])
+        if not values:
+            return await self.recording_get(user_id, recording_id)
+        await self._session.execute(
+            update(Recording)
+            .where(
+                Recording.id == uuid.UUID(recording_id),
+                Recording.user_id == uuid.UUID(user_id),
+            )
+            .values(**values)
+        )
+        return await self.recording_get(user_id, recording_id)
+
+    async def recording_list_processing(self) -> list[dict]:
+        models = (
+            await self._session.scalars(
+                select(Recording)
+                .where(Recording.status == "processing")
+                .order_by(Recording.created_at.asc(), Recording.id.asc())
+            )
+        ).all()
+        return [_row_dict(model, {"transcript_json"}) for model in models]

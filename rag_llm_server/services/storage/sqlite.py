@@ -62,7 +62,7 @@ CREATE TABLE IF NOT EXISTS message (
 CREATE TABLE IF NOT EXISTS interview_report (
   id TEXT PRIMARY KEY,
   user_id TEXT NOT NULL REFERENCES app_user(id),
-  session_id TEXT REFERENCES interview_session(id),
+  session_id TEXT UNIQUE REFERENCES interview_session(id),
   scores_json TEXT,
   feedback_json TEXT,
   suggestions_json TEXT,
@@ -172,6 +172,7 @@ class SqliteStorage(BaseStorage):
             CREATE INDEX IF NOT EXISTS idx_session_user_status ON interview_session(user_id, status, started_at DESC);
             CREATE INDEX IF NOT EXISTS idx_report_user_created ON interview_report(user_id, created_at DESC);
             CREATE INDEX IF NOT EXISTS idx_recording_user_created ON recording(user_id, created_at DESC);
+            CREATE UNIQUE INDEX IF NOT EXISTS uq_interview_report_session_id ON interview_report(session_id);
             CREATE UNIQUE INDEX IF NOT EXISTS idx_session_rtc_room ON interview_session(rtc_room_id);
             CREATE UNIQUE INDEX IF NOT EXISTS idx_session_rtc_user ON interview_session(rtc_user_id);
             CREATE UNIQUE INDEX IF NOT EXISTS idx_session_rtc_task ON interview_session(rtc_task_id);
@@ -493,6 +494,8 @@ class SqliteStorage(BaseStorage):
 
     async def recording_create(self, user_id: str, recording: dict) -> dict:
         row = dict(recording)
+        if row.get("report_id") and not await self.report_get(user_id, row["report_id"]):
+            raise ValueError("report does not belong to user")
         row.setdefault("id", str(uuid.uuid4()))
         for key in (
             "filename", "ext", "tos_key", "size_bytes", "asr_task_id", "transcript_json",
@@ -551,13 +554,17 @@ class SqliteStorage(BaseStorage):
         row.setdefault("source", "session")
         row.setdefault("created_at", utc_now())
         row["user_id"] = user_id
-        await self._c().execute(
-            "INSERT INTO interview_report (id, user_id, session_id, scores_json, feedback_json, "
-            "suggestions_json, md_path, position, source, created_at) VALUES (:id, :user_id, "
-            ":session_id, :scores_json, :feedback_json, :suggestions_json, :md_path, :position, "
-            ":source, :created_at)", row,
-        )
-        await self._c().commit()
+        try:
+            await self._c().execute(
+                "INSERT INTO interview_report (id, user_id, session_id, scores_json, feedback_json, "
+                "suggestions_json, md_path, position, source, created_at) VALUES (:id, :user_id, "
+                ":session_id, :scores_json, :feedback_json, :suggestions_json, :md_path, :position, "
+                ":source, :created_at)", row,
+            )
+            await self._c().commit()
+        except sqlite3.IntegrityError:
+            await self._c().rollback()
+            raise StorageConflictError("report already exists for session") from None
         return row
 
     async def report_get(self, user_id: str, report_id: str) -> dict | None:
