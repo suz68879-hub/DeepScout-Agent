@@ -5,6 +5,10 @@
 from abc import ABC, abstractmethod
 
 
+class StorageConflictError(Exception):
+    """持久化唯一性约束冲突，不暴露具体数据库异常。"""
+
+
 class BaseStorage(ABC):
     @abstractmethod
     async def init(self) -> None: ...

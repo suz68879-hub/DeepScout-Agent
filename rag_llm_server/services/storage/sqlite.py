@@ -1,4 +1,5 @@
 """Async SQLite repository with user ownership and idempotent legacy migration."""
+import sqlite3
 import secrets
 import uuid
 from pathlib import Path
@@ -8,7 +9,7 @@ import aiosqlite
 from config import settings
 from services.auth_service import hash_password_async, normalize_username, validate_password
 from services.clock import utc_now
-from .base import BaseStorage
+from .base import BaseStorage, StorageConflictError
 
 
 _SCHEMA = """
@@ -278,11 +279,15 @@ class SqliteStorage(BaseStorage):
             "id": str(uuid.uuid4()), "username": username, "password_hash": password_hash,
             "role": role, "created_at": utc_now(),
         }
-        await self._c().execute(
-            "INSERT INTO app_user (id, username, password_hash, role, created_at) "
-            "VALUES (:id, :username, :password_hash, :role, :created_at)", row,
-        )
-        await self._c().commit()
+        try:
+            await self._c().execute(
+                "INSERT INTO app_user (id, username, password_hash, role, created_at) "
+                "VALUES (:id, :username, :password_hash, :role, :created_at)", row,
+            )
+            await self._c().commit()
+        except sqlite3.IntegrityError:
+            await self._c().rollback()
+            raise StorageConflictError("username already exists") from None
         return row
 
     async def user_get_by_username(self, username: str) -> dict | None:
