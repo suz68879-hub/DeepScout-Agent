@@ -58,8 +58,38 @@ jobs:
         with:
           python-version: "3.13"
 
+      - name: Start PostgreSQL and create isolated CI roles
+        shell: bash
+        run: |
+          sudo systemctl start postgresql.service
+          APP_PASSWORD="$(openssl rand -hex 24)"
+          MIGRATION_PASSWORD="$(openssl rand -hex 24)"
+          ANALYTICS_PASSWORD="$(openssl rand -hex 24)"
+          echo "::add-mask::$APP_PASSWORD"
+          echo "::add-mask::$MIGRATION_PASSWORD"
+          echo "::add-mask::$ANALYTICS_PASSWORD"
+          sudo -u postgres psql \
+            --set=app_password="$APP_PASSWORD" \
+            --set=migration_password="$MIGRATION_PASSWORD" \
+            --set=analytics_password="$ANALYTICS_PASSWORD" <<'SQL'
+          CREATE ROLE deepscout_app LOGIN PASSWORD :'app_password';
+          CREATE ROLE deepscout_migration LOGIN PASSWORD :'migration_password';
+          CREATE ROLE deepscout_analytics LOGIN PASSWORD :'analytics_password';
+          CREATE DATABASE deepscout_test OWNER deepscout_migration;
+          SQL
+          {
+            echo "APP_ENV=test"
+            echo "STORAGE_BACKEND=postgres"
+            echo "DATABASE_URL=postgresql+psycopg://deepscout_app:${APP_PASSWORD}@127.0.0.1:5432/deepscout_test"
+            echo "MIGRATION_DATABASE_URL=postgresql+psycopg://deepscout_migration:${MIGRATION_PASSWORD}@127.0.0.1:5432/deepscout_test"
+            echo "ANALYTICS_DATABASE_URL=postgresql+psycopg://deepscout_analytics:${ANALYTICS_PASSWORD}@127.0.0.1:5432/deepscout_test"
+          } >> "$GITHUB_ENV"
+
       - name: Install dependencies
         run: uv sync --dev
+
+      - name: Upgrade PostgreSQL schema
+        run: uv run alembic upgrade head
 
       - name: Backend tests and coverage gate
         run: uv run pytest --cov=. --cov-report=term-missing --cov-report=xml:coverage.xml -q
