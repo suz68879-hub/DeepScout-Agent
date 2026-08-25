@@ -1,5 +1,7 @@
 import os
+import ssl
 from math import isfinite
+from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
 from dotenv import load_dotenv
@@ -120,6 +122,51 @@ def _redis_target(value: str) -> tuple[str, bool]:
     return f"{host}/{database}", parsed.scheme == "rediss"
 
 
+def _celery_broker_target(value: str, app_env: str) -> tuple[str, bool]:
+    """校验 RabbitMQ URL，并返回不含凭据的日志目标及 TLS 状态。"""
+    try:
+        parsed = urlsplit(value)
+        port = parsed.port
+    except ValueError as exc:
+        raise ValueError("CELERY_BROKER_URL must be an AMQP URL") from exc
+    if parsed.scheme not in {"amqp", "amqps"} or not parsed.hostname:
+        raise ValueError("CELERY_BROKER_URL must be an AMQP URL")
+    if app_env == "production" and parsed.scheme != "amqps":
+        raise ValueError("CELERY_BROKER_URL must use amqps in production")
+
+    host = parsed.hostname
+    if port is not None:
+        host = f"{host}:{port}"
+    virtual_host = parsed.path.lstrip("/") or "/"
+    return f"{host}/{virtual_host}", parsed.scheme == "amqps"
+
+
+def _optional_existing_file(key: str) -> str | None:
+    """读取可选证书路径；配置后必须指向现有文件。"""
+    value = os.getenv(key)
+    if not value:
+        return None
+    if not Path(value).is_file():
+        raise ValueError(f"{key} does not exist or is not a file")
+    return value
+
+
+def _validate_celery_broker_certificates(
+    ca_cert: str | None,
+    client_cert: str | None,
+    client_key: str | None,
+) -> None:
+    """在启动阶段解析自定义 TLS 证书，错误信息不包含本地路径。"""
+    if not (ca_cert or client_cert or client_key):
+        return
+    try:
+        context = ssl.create_default_context(cafile=ca_cert)
+        if client_cert and client_key:
+            context.load_cert_chain(client_cert, client_key)
+    except (OSError, ssl.SSLError):
+        raise ValueError("Celery broker certificate configuration is invalid") from None
+
+
 class Config:
     APP_ENV = os.getenv("APP_ENV", "development").strip().lower()
     LOG_FORMAT = os.getenv("LOG_FORMAT", "json").strip().lower()
@@ -203,6 +250,22 @@ class Config:
         self.AUTH_SESSION_CACHE_ENABLED = _bool_env(
             "AUTH_SESSION_CACHE_ENABLED", False
         )
+        self.CELERY_BROKER_URL = os.getenv("CELERY_BROKER_URL") or None
+        self.CELERY_BROKER_CONNECTION_TIMEOUT = _positive_float_env(
+            "CELERY_BROKER_CONNECTION_TIMEOUT", 5.0
+        )
+        self.CELERY_BROKER_MAX_RETRIES = _int_env(
+            "CELERY_BROKER_MAX_RETRIES", 3, 0
+        )
+        self.CELERY_COLD_WORKER_CONCURRENCY = _int_env(
+            "CELERY_COLD_WORKER_CONCURRENCY", 2, 1
+        )
+        self.CELERY_RECORDING_WORKER_CONCURRENCY = _int_env(
+            "CELERY_RECORDING_WORKER_CONCURRENCY", 2, 1
+        )
+        self.CELERY_OUTBOX_WORKER_CONCURRENCY = _int_env(
+            "CELERY_OUTBOX_WORKER_CONCURRENCY", 1, 1
+        )
 
         requires_postgres = self.STORAGE_BACKEND == "postgres" or self.APP_ENV == "production"
         if requires_postgres and not self.DATABASE_URL:
@@ -229,6 +292,45 @@ class Config:
         if self.AUTH_SESSION_CACHE_ENABLED and not self.REDIS_URL:
             raise ValueError("AUTH_SESSION_CACHE_ENABLED requires REDIS_URL")
 
+        if self.APP_ENV == "production" and not self.CELERY_BROKER_URL:
+            raise ValueError("CELERY_BROKER_URL is required in production")
+        self._celery_broker_log_target = None
+        self.CELERY_BROKER_TLS = False
+        if self.CELERY_BROKER_URL:
+            (
+                self._celery_broker_log_target,
+                self.CELERY_BROKER_TLS,
+            ) = _celery_broker_target(self.CELERY_BROKER_URL, self.APP_ENV)
+
+        self.CELERY_BROKER_CA_CERT = _optional_existing_file(
+            "CELERY_BROKER_CA_CERT"
+        )
+        self.CELERY_BROKER_CLIENT_CERT = os.getenv("CELERY_BROKER_CLIENT_CERT") or None
+        self.CELERY_BROKER_CLIENT_KEY = os.getenv("CELERY_BROKER_CLIENT_KEY") or None
+        if bool(self.CELERY_BROKER_CLIENT_CERT) != bool(self.CELERY_BROKER_CLIENT_KEY):
+            raise ValueError(
+                "CELERY_BROKER_CLIENT_CERT and CELERY_BROKER_CLIENT_KEY "
+                "must be configured together"
+            )
+        if self.CELERY_BROKER_CLIENT_CERT:
+            self.CELERY_BROKER_CLIENT_CERT = _optional_existing_file(
+                "CELERY_BROKER_CLIENT_CERT"
+            )
+            self.CELERY_BROKER_CLIENT_KEY = _optional_existing_file(
+                "CELERY_BROKER_CLIENT_KEY"
+            )
+        if (
+            self.CELERY_BROKER_CA_CERT
+            or self.CELERY_BROKER_CLIENT_CERT
+            or self.CELERY_BROKER_CLIENT_KEY
+        ) and not self.CELERY_BROKER_TLS:
+            raise ValueError("Celery broker certificates require an amqps URL")
+        _validate_celery_broker_certificates(
+            self.CELERY_BROKER_CA_CERT,
+            self.CELERY_BROKER_CLIENT_CERT,
+            self.CELERY_BROKER_CLIENT_KEY,
+        )
+
         self.DATABASE_PATH = (
             os.getenv("DATABASE_PATH", "data/interview.db")
             if self.STORAGE_BACKEND == "sqlite"
@@ -242,6 +344,10 @@ class Config:
     def redis_log_target(self) -> str | None:
         """返回可安全写入日志的 Redis 主机与数据库编号。"""
         return self._redis_log_target
+
+    def celery_broker_log_target(self) -> str | None:
+        """返回可安全写入日志的 RabbitMQ 主机与 vhost。"""
+        return self._celery_broker_log_target
 
     def agent_endpoint_id(self, agent: str) -> str:
         """按 Agent 名取端点 ID；未配置或未知 Agent 回落到默认端点。"""

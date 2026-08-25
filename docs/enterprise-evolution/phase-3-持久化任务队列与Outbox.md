@@ -1,6 +1,6 @@
 # Phase 3：持久化任务队列与 Outbox
 
-> 状态：未开始  
+> 状态：进行中
 > 前置阶段：Phase 2 退出门槛全部通过  
 > 建议周期：2～3 个迭代  
 > 阶段负责人：后端负责人；SRE、测试与前端协作
@@ -36,6 +36,7 @@
 
 ### P3-T01 建立 Celery 与 RabbitMQ 基础
 
+- **实施状态**：已完成；本地 RabbitMQ 4.3.5 持久发布/消费验收通过（18/18）。
 - **依赖/并行**：Phase 2；最先执行。**规模/角色**：M，后端/SRE。
 - **预计文件**：`rag_llm_server/pyproject.toml`、`rag_llm_server/uv.lock`、`rag_llm_server/config.py`、`rag_llm_server/tasks/celery_app.py`、`rag_llm_server/tests/test_celery_config.py`。
 - **契约与步骤**：配置 TLS broker URL、confirm、durable queue、late ack、reject_on_worker_lost、prefetch=1；定义 cold/recording/outbox 路由和独立并发上限。
