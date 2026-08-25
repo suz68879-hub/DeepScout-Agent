@@ -7,15 +7,30 @@ from redis.asyncio import Redis
 
 import api.auth as auth_api
 from services.auth_service import token_digest
+from services.rate_limit import RateLimitDecision
 from services.redis_client import SharedStateUnavailable
 from services.redis_keys import auth_session_key
 from services.session_cache import SessionCache
 
 
+@pytest.fixture(autouse=True)
+def allow_auth_rate_limits(monkeypatch):
+    class AllowLimiter:
+        async def consume_register(self, _client_ip):
+            return RateLimitDecision(True, 0)
+
+        async def consume_login(self, _client_ip, _username):
+            return RateLimitDecision(True, 0)
+
+        async def clear_login(self, _client_ip, _username):
+            return None
+
+    monkeypatch.setattr(auth_api, "get_rate_limiter", lambda: AllowLimiter())
+
+
 async def test_register_me_and_logout_cookie_flow(tmp_storage, monkeypatch):
     storage = await tmp_storage()
     monkeypatch.setattr(auth_api, "storage", storage)
-    auth_api.reset_rate_limits()
     app = FastAPI()
     app.include_router(auth_api.router)
     transport = httpx.ASGITransport(app=app)
@@ -44,7 +59,6 @@ async def test_register_me_and_logout_cookie_flow(tmp_storage, monkeypatch):
 async def test_duplicate_username_and_generic_login_error(tmp_storage, monkeypatch):
     storage = await tmp_storage()
     monkeypatch.setattr(auth_api, "storage", storage)
-    auth_api.reset_rate_limits()
     app = FastAPI()
     app.include_router(auth_api.router)
     transport = httpx.ASGITransport(app=app)
@@ -66,25 +80,22 @@ async def test_duplicate_username_and_generic_login_error(tmp_storage, monkeypat
     await storage.close()
 
 
-async def test_login_rate_limit_is_process_local(tmp_storage, monkeypatch):
-    storage = await tmp_storage()
-    monkeypatch.setattr(auth_api, "storage", storage)
-    auth_api.reset_rate_limits()
+async def test_login_rate_limit_returns_retry_after(monkeypatch):
+    class DenyLimiter:
+        async def consume_login(self, _client_ip, _username):
+            return RateLimitDecision(False, 42)
+
+    monkeypatch.setattr(auth_api, "get_rate_limiter", lambda: DenyLimiter())
     app = FastAPI()
     app.include_router(auth_api.router)
     transport = httpx.ASGITransport(app=app)
 
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-        for _ in range(5):
-            response = await client.post(
-                "/api/auth/login", json={"username": "missing", "password": "wrong-password"},
-            )
-            assert response.status_code == 401
         response = await client.post(
             "/api/auth/login", json={"username": "missing", "password": "wrong-password"},
         )
-        assert response.status_code == 429
-    await storage.close()
+    assert response.status_code == 429
+    assert response.headers["Retry-After"] == "42"
 
 
 async def test_session_cache_failure_returns_503_instead_of_401(monkeypatch):
@@ -123,7 +134,6 @@ async def test_two_api_clients_share_login_and_logout_state(tmp_storage, monkeyp
     monkeypatch.setattr(auth_api.settings, "APP_ENV", "test")
     monkeypatch.setattr(auth_api.settings, "AUTH_SESSION_CACHE_ENABLED", True)
     monkeypatch.setattr(auth_api, "get_session_cache", lambda: caches["active"])
-    auth_api.reset_rate_limits()
     app = FastAPI()
     app.include_router(auth_api.router)
     transport = httpx.ASGITransport(app=app)
