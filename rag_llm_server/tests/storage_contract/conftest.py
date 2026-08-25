@@ -1,6 +1,4 @@
-import asyncio
 import os
-import sys
 import uuid
 from contextlib import asynccontextmanager
 
@@ -13,13 +11,6 @@ from db.engine import build_database_runtime
 from db.models import AppUser
 from services.storage.postgres import PostgresRepository
 from services.storage.sqlite import SqliteStorage
-
-
-def pytest_asyncio_loop_factories(config, item):
-    del config, item
-    if sys.platform == "win32":
-        return {"selector": asyncio.SelectorEventLoop}
-    return {"default": asyncio.new_event_loop}
 
 
 @pytest.fixture(params=["sqlite", "postgres"])
