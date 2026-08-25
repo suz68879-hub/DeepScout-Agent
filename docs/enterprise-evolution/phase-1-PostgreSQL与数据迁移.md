@@ -1,6 +1,6 @@
 # Phase 1：PostgreSQL 与数据迁移
 
-> 状态：未开始  
+> 状态：进行中（本地退出门槛已通过，等待 GitHub required checks）
 > 前置阶段：Phase 0 退出门槛全部通过  
 > 建议周期：2～3 个迭代  
 > 阶段负责人：后端负责人；DBA、测试负责人协作
@@ -165,11 +165,11 @@
 
 ## 4. 阶段退出门槛
 
-- [ ] SQLite/PostgreSQL Repository contract suite 全部通过。
-- [ ] Alembic 可从空库升级，Schema 无漂移，应用启动不执行 DDL。
-- [ ] 两次脱敏迁移 100% 校验且回退演练通过。
-- [ ] PostgreSQL 模式下全量后端/E2E 通过。
-- [ ] 生产目标配置不依赖本地 SQLite，Analytics 使用独立只读账号。
+- [x] SQLite/PostgreSQL Repository contract suite 全部通过。
+- [x] Alembic 可从空库升级，Schema 无漂移，应用启动不执行 DDL。
+- [x] 两次脱敏迁移 100% 校验且回退演练通过。
+- [x] PostgreSQL 模式下全量后端/E2E 通过。
+- [x] 生产目标配置不依赖本地 SQLite，Analytics 使用独立只读账号。
 
 ## 5. 风险与交接
 
