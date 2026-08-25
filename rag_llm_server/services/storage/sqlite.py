@@ -1,4 +1,5 @@
 """Async SQLite repository with user ownership and idempotent legacy migration."""
+import sqlite3
 import secrets
 import uuid
 from pathlib import Path
@@ -8,7 +9,8 @@ import aiosqlite
 from config import settings
 from services.auth_service import hash_password_async, normalize_username, validate_password
 from services.clock import utc_now
-from .base import BaseStorage
+from .base import BaseStorage, StorageConflictError, StorageVersionConflictError
+from .pagination import Cursor, CursorError, Page, encode_cursor
 
 
 _SCHEMA = """
@@ -47,7 +49,8 @@ CREATE TABLE IF NOT EXISTS interview_session (
   rtc_user_id TEXT NOT NULL UNIQUE,
   rtc_task_id TEXT NOT NULL UNIQUE,
   rtc_callback_id TEXT NOT NULL UNIQUE,
-  rtc_status TEXT NOT NULL DEFAULT 'created'
+  rtc_status TEXT NOT NULL DEFAULT 'created',
+  version INTEGER NOT NULL DEFAULT 1
 );
 CREATE TABLE IF NOT EXISTS message (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -60,7 +63,7 @@ CREATE TABLE IF NOT EXISTS message (
 CREATE TABLE IF NOT EXISTS interview_report (
   id TEXT PRIMARY KEY,
   user_id TEXT NOT NULL REFERENCES app_user(id),
-  session_id TEXT REFERENCES interview_session(id),
+  session_id TEXT UNIQUE REFERENCES interview_session(id),
   scores_json TEXT,
   feedback_json TEXT,
   suggestions_json TEXT,
@@ -134,6 +137,9 @@ class SqliteStorage(BaseStorage):
             await self._add_column(
                 "interview_session", "rtc_status", "TEXT NOT NULL DEFAULT 'created'",
             )
+            await self._add_column(
+                "interview_session", "version", "INTEGER NOT NULL DEFAULT 1",
+            )
 
             session_rows = await (
                 await conn.execute(
@@ -167,6 +173,7 @@ class SqliteStorage(BaseStorage):
             CREATE INDEX IF NOT EXISTS idx_session_user_status ON interview_session(user_id, status, started_at DESC);
             CREATE INDEX IF NOT EXISTS idx_report_user_created ON interview_report(user_id, created_at DESC);
             CREATE INDEX IF NOT EXISTS idx_recording_user_created ON recording(user_id, created_at DESC);
+            CREATE UNIQUE INDEX IF NOT EXISTS uq_interview_report_session_id ON interview_report(session_id);
             CREATE UNIQUE INDEX IF NOT EXISTS idx_session_rtc_room ON interview_session(rtc_room_id);
             CREATE UNIQUE INDEX IF NOT EXISTS idx_session_rtc_user ON interview_session(rtc_user_id);
             CREATE UNIQUE INDEX IF NOT EXISTS idx_session_rtc_task ON interview_session(rtc_task_id);
@@ -278,11 +285,15 @@ class SqliteStorage(BaseStorage):
             "id": str(uuid.uuid4()), "username": username, "password_hash": password_hash,
             "role": role, "created_at": utc_now(),
         }
-        await self._c().execute(
-            "INSERT INTO app_user (id, username, password_hash, role, created_at) "
-            "VALUES (:id, :username, :password_hash, :role, :created_at)", row,
-        )
-        await self._c().commit()
+        try:
+            await self._c().execute(
+                "INSERT INTO app_user (id, username, password_hash, role, created_at) "
+                "VALUES (:id, :username, :password_hash, :role, :created_at)", row,
+            )
+            await self._c().commit()
+        except sqlite3.IntegrityError:
+            await self._c().rollback()
+            raise StorageConflictError("username already exists") from None
         return row
 
     async def user_get_by_username(self, username: str) -> dict | None:
@@ -379,6 +390,10 @@ class SqliteStorage(BaseStorage):
         if row.get("resume_id") and not await self.resume_get(user_id, row["resume_id"]):
             raise ValueError("resume does not belong to user")
         row.setdefault("id", str(uuid.uuid4()))
+        row.setdefault("resume_id", None)
+        row.setdefault("position", None)
+        row.setdefault("stage", None)
+        row.setdefault("status", None)
         row.setdefault("started_at", None)
         row.setdefault("ended_at", None)
         room_id, rtc_user_id, task_id, callback_id = self._new_rtc_ids()
@@ -387,12 +402,13 @@ class SqliteStorage(BaseStorage):
         row.setdefault("rtc_task_id", task_id)
         row.setdefault("rtc_callback_id", callback_id)
         row.setdefault("rtc_status", "created")
+        row.setdefault("version", 1)
         row["user_id"] = user_id
         await self._c().execute(
             "INSERT INTO interview_session (id, user_id, resume_id, position, stage, status, "
-            "started_at, ended_at, rtc_room_id, rtc_user_id, rtc_task_id, rtc_callback_id, rtc_status) "
+            "started_at, ended_at, rtc_room_id, rtc_user_id, rtc_task_id, rtc_callback_id, rtc_status, version) "
             "VALUES (:id, :user_id, :resume_id, :position, :stage, :status, :started_at, :ended_at, "
-            ":rtc_room_id, :rtc_user_id, :rtc_task_id, :rtc_callback_id, :rtc_status)", row,
+            ":rtc_room_id, :rtc_user_id, :rtc_task_id, :rtc_callback_id, :rtc_status, :version)", row,
         )
         await self._c().commit()
         return row
@@ -412,15 +428,33 @@ class SqliteStorage(BaseStorage):
         )).fetchone()
         return dict(row) if row else None
 
-    async def session_update(self, user_id: str, session_id: str, patch: dict) -> dict | None:
+    async def session_update(
+        self,
+        user_id: str,
+        session_id: str,
+        patch: dict,
+        expected_version: int | None = None,
+    ) -> dict | None:
         fields = {key: patch[key] for key in patch if key in self.SESSION_COLS}
         if not fields:
             return await self.session_get(user_id, session_id)
         sets = ", ".join(f"{key} = :{key}" for key in fields)
-        await self._c().execute(
-            f"UPDATE interview_session SET {sets} WHERE id = :id AND user_id = :user_id",
-            {**fields, "id": session_id, "user_id": user_id},
+        version_set = ", version = version + 1" if expected_version is not None else ""
+        version_where = " AND version = :expected_version" if expected_version is not None else ""
+        cursor = await self._c().execute(
+            f"UPDATE interview_session SET {sets}{version_set} "
+            f"WHERE id = :id AND user_id = :user_id{version_where}",
+            {
+                **fields,
+                "id": session_id,
+                "user_id": user_id,
+                "expected_version": expected_version,
+            },
         )
+        if expected_version is not None and cursor.rowcount == 0:
+            if await self.session_get(user_id, session_id):
+                raise StorageVersionConflictError("session version conflict")
+            return None
         await self._c().commit()
         return await self.session_get(user_id, session_id)
 
@@ -461,6 +495,8 @@ class SqliteStorage(BaseStorage):
 
     async def recording_create(self, user_id: str, recording: dict) -> dict:
         row = dict(recording)
+        if row.get("report_id") and not await self.report_get(user_id, row["report_id"]):
+            raise ValueError("report does not belong to user")
         row.setdefault("id", str(uuid.uuid4()))
         for key in (
             "filename", "ext", "tos_key", "size_bytes", "asr_task_id", "transcript_json",
@@ -514,18 +550,23 @@ class SqliteStorage(BaseStorage):
         if row.get("session_id") and not await self.session_get(user_id, row["session_id"]):
             raise ValueError("session does not belong to user")
         row.setdefault("id", str(uuid.uuid4()))
+        row.setdefault("session_id", None)
         row.setdefault("md_path", None)
         row.setdefault("position", None)
         row.setdefault("source", "session")
         row.setdefault("created_at", utc_now())
         row["user_id"] = user_id
-        await self._c().execute(
-            "INSERT INTO interview_report (id, user_id, session_id, scores_json, feedback_json, "
-            "suggestions_json, md_path, position, source, created_at) VALUES (:id, :user_id, "
-            ":session_id, :scores_json, :feedback_json, :suggestions_json, :md_path, :position, "
-            ":source, :created_at)", row,
-        )
-        await self._c().commit()
+        try:
+            await self._c().execute(
+                "INSERT INTO interview_report (id, user_id, session_id, scores_json, feedback_json, "
+                "suggestions_json, md_path, position, source, created_at) VALUES (:id, :user_id, "
+                ":session_id, :scores_json, :feedback_json, :suggestions_json, :md_path, :position, "
+                ":source, :created_at)", row,
+            )
+            await self._c().commit()
+        except sqlite3.IntegrityError:
+            await self._c().rollback()
+            raise StorageConflictError("report already exists for session") from None
         return row
 
     async def report_get(self, user_id: str, report_id: str) -> dict | None:
@@ -536,3 +577,37 @@ class SqliteStorage(BaseStorage):
             "SELECT * FROM interview_report WHERE user_id = ? ORDER BY created_at DESC", (user_id,),
         )).fetchall()
         return [dict(row) for row in rows]
+
+    async def report_page(
+        self, user_id: str, limit: int, cursor: Cursor | None
+    ) -> Page:
+        if not 1 <= limit <= 100:
+            raise ValueError("limit must be between 1 and 100")
+        parameters: list = [user_id]
+        where = "user_id = ?"
+        if cursor is not None:
+            anchor = await (
+                await self._c().execute(
+                    "SELECT 1 FROM interview_report "
+                    "WHERE user_id = ? AND id = ? AND created_at = ?",
+                    (user_id, cursor.id, cursor.created_at),
+                )
+            ).fetchone()
+            if anchor is None:
+                raise CursorError("invalid or expired cursor")
+            where += " AND (created_at < ? OR (created_at = ? AND id < ?))"
+            parameters.extend([cursor.created_at, cursor.created_at, cursor.id])
+        parameters.append(limit + 1)
+        rows = await (
+            await self._c().execute(
+                f"SELECT * FROM interview_report WHERE {where} "
+                "ORDER BY created_at DESC, id DESC LIMIT ?",
+                parameters,
+            )
+        ).fetchall()
+        items = [dict(row) for row in rows[:limit]]
+        next_cursor = None
+        if len(rows) > limit:
+            last = items[-1]
+            next_cursor = encode_cursor(last["created_at"], last["id"])
+        return Page(items=items, next_cursor=next_cursor)

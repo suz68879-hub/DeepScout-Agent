@@ -4,6 +4,16 @@
 """
 from abc import ABC, abstractmethod
 
+from .pagination import Cursor, Page
+
+
+class StorageConflictError(Exception):
+    """持久化唯一性约束冲突，不暴露具体数据库异常。"""
+
+
+class StorageVersionConflictError(Exception):
+    """资源版本已变化，调用方必须重新读取后再更新。"""
+
 
 class BaseStorage(ABC):
     @abstractmethod
@@ -44,7 +54,13 @@ class BaseStorage(ABC):
     @abstractmethod
     async def session_get_by_callback(self, callback_id: str) -> dict | None: ...
     @abstractmethod
-    async def session_update(self, user_id: str, session_id: str, patch: dict) -> dict | None: ...
+    async def session_update(
+        self,
+        user_id: str,
+        session_id: str,
+        patch: dict,
+        expected_version: int | None = None,
+    ) -> dict | None: ...
     @abstractmethod
     async def session_list_running(self, user_id: str) -> list[dict]: ...
 
@@ -61,3 +77,19 @@ class BaseStorage(ABC):
     async def report_get(self, user_id: str, report_id: str) -> dict | None: ...
     @abstractmethod
     async def report_list(self, user_id: str) -> list[dict]: ...
+    @abstractmethod
+    async def report_page(
+        self, user_id: str, limit: int, cursor: Cursor | None
+    ) -> Page: ...
+
+    # recording
+    @abstractmethod
+    async def recording_create(self, user_id: str, recording: dict) -> dict: ...
+    @abstractmethod
+    async def recording_get(self, user_id: str, recording_id: str) -> dict | None: ...
+    @abstractmethod
+    async def recording_update(
+        self, user_id: str, recording_id: str, patch: dict
+    ) -> dict | None: ...
+    @abstractmethod
+    async def recording_list_processing(self) -> list[dict]: ...

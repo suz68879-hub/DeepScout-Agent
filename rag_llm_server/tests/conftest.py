@@ -1,4 +1,5 @@
 """pytest 全局配置：关闭外部追踪、注入 sys.path 与通用 fixture。"""
+import asyncio
 import os
 import sys
 from pathlib import Path
@@ -15,6 +16,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.append(str(Path(__file__).resolve().parents[2]))
 
 import pytest
+
+
+def pytest_asyncio_loop_factories(config, item):
+    del config, item
+    if sys.platform == "win32":
+        return {"selector": asyncio.SelectorEventLoop}
+    return {"default": asyncio.new_event_loop}
 
 
 @pytest.fixture

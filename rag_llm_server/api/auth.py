@@ -1,5 +1,4 @@
 """Username/password authentication backed by opaque HttpOnly sessions."""
-import sqlite3
 import time
 from collections import defaultdict, deque
 
@@ -15,6 +14,7 @@ from services.auth_service import (
     verify_password_async,
 )
 from services.storage import storage
+from services.storage.base import StorageConflictError
 
 COOKIE_NAME = "interview_session"
 COOKIE_MAX_AGE = 7 * 24 * 60 * 60
@@ -99,7 +99,7 @@ async def register(body: Credentials, request: Request, response: Response):
         user = await storage.user_create(username, password_hash)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    except sqlite3.IntegrityError as exc:
+    except StorageConflictError as exc:
         raise HTTPException(status_code=409, detail="username already exists") from exc
     return await _issue_session(response, user)
 

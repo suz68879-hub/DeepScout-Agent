@@ -4,9 +4,20 @@
 md_path 语义：落库值永远是可直接读取的路径/key（TOS 行存完整 key，本地行存绝对路径）。
 """
 from .file_storage import LocalFileStorage
+from .postgres import PostgresStorage
 from .sqlite import SqliteStorage
+from config import Config, settings
 
-storage = SqliteStorage()
+
+def build_storage(config: Config):
+    if config.STORAGE_BACKEND == "sqlite":
+        return SqliteStorage(config.DATABASE_PATH)
+    if config.STORAGE_BACKEND == "postgres":
+        return PostgresStorage()
+    raise ValueError(f"unsupported storage backend: {config.STORAGE_BACKEND}")
+
+
+storage = build_storage(settings)
 
 _file_store = None
 

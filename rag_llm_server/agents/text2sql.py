@@ -98,7 +98,12 @@ async def generate_query(question: str, llm=None) -> SqlQuery:
             return _template_as_query(_match_template(question))
     except Exception:
         return _template_as_query(_match_template(question))
-    from mcp.sqlite_server import validate_query
+    from config import settings
+
+    if settings.STORAGE_BACKEND == "postgres":
+        from mcp.postgres_server import validate_query
+    else:
+        from mcp.sqlite_server import validate_query
 
     try:
         validate_query(result.sql)

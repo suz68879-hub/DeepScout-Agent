@@ -6,7 +6,7 @@ import ResumePanel from '@/components/ResumePanel';
 import type { StartResponse } from '@/domain/interview/types';
 import type { RecordingStatusResponse } from '@/domain/recording/types';
 import { MAX_UPLOAD_BYTES, POLL_INTERVAL_MS } from '@/domain/recording/types';
-import type { ReportRow } from '@/domain/report/types';
+import type { ReportPage, ReportRow } from '@/domain/report/types';
 import { overallFromReport } from '@/domain/report/types';
 import type { ResumeRow } from '@/domain/resume/types';
 import styles from './index.module.less';
@@ -21,8 +21,8 @@ export default function HomePage() {
   const [starting, setStarting] = useState(false);
 
   useEffect(() => {
-    getJson<ReportRow[]>('/api/reports')
-      .then(setReports)
+    getJson<ReportPage>('/api/reports?limit=3')
+      .then((page) => setReports(page.items))
       .catch(() => {
         Message.error('获取报告失败，请稍后重试');
         setReports([]);

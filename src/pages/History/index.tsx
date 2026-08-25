@@ -1,7 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { getJson } from '@/api/rest';
-import type { ReportRow } from '@/domain/report/types';
+import type { ReportPage, ReportRow } from '@/domain/report/types';
 import { overallFromReport } from '@/domain/report/types';
 import styles from './index.module.less';
 
@@ -10,13 +10,28 @@ export default function HistoryPage() {
   const [reports, setReports] = useState<ReportRow[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
+
+  const loadReports = useCallback((cursor?: string) => {
+    if (cursor) setLoadingMore(true);
+    const query = new URLSearchParams({ limit: '20' });
+    if (cursor) query.set('cursor', cursor);
+    return getJson<ReportPage>(`/api/reports?${query.toString()}`)
+      .then((page) => {
+        setReports((current) => (cursor ? [...current, ...page.items] : page.items));
+        setNextCursor(page.next_cursor);
+      })
+      .catch((e: unknown) => setError(e instanceof Error ? e.message : '历史记录加载失败'))
+      .finally(() => {
+        setLoading(false);
+        setLoadingMore(false);
+      });
+  }, []);
 
   useEffect(() => {
-    getJson<ReportRow[]>('/api/reports')
-      .then(setReports)
-      .catch((e: unknown) => setError(e instanceof Error ? e.message : '历史记录加载失败'))
-      .finally(() => setLoading(false));
-  }, []);
+    void loadReports();
+  }, [loadReports]);
 
   if (loading) {
     return <div className={styles.loading}>加载中…</div>;
@@ -49,6 +64,11 @@ export default function HistoryPage() {
             </li>
           ))}
         </ul>
+      )}
+      {nextCursor && (
+        <button type="button" disabled={loadingMore} onClick={() => void loadReports(nextCursor)}>
+          {loadingMore ? '加载中…' : '加载更多'}
+        </button>
       )}
     </div>
   );
