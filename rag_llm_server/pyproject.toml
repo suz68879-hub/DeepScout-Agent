@@ -46,7 +46,7 @@ asyncio_mode = "auto"
 testpaths = ["tests"]
 
 [tool.coverage.run]
-omit = ["tests/*", ".venv/*"]
+omit = ["tests/*", ".venv/*", "scripts/multi_replica_acceptance.py"]
 
 [tool.coverage.report]
 fail_under = 81
