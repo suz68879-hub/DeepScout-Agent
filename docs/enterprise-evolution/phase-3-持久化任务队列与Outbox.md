@@ -72,6 +72,7 @@
 
 ### P3-T04 建立统一任务分发接口
 
+- **实施状态**：已完成；生产分发仅写入同事务 Job+Outbox，显式 inline adapter、类型路由、幂等与生产环境保护验证通过。
 - **依赖/并行**：检查点 A。**规模/角色**：M，后端。
 - **预计文件**：`rag_llm_server/services/jobs/dispatcher.py`、`rag_llm_server/services/jobs/handlers.py`、`rag_llm_server/tests/test_job_dispatcher.py`、`rag_llm_server/tests/test_job_handlers.py`。
 - **契约与步骤**：定义 `enqueue(job_type, owner_id, payload_ref, idempotency_key)`；生产实现只创建 Job+Outbox；测试提供显式 inline adapter，默认仍验证状态机。
