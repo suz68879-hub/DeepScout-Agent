@@ -91,6 +91,9 @@ jobs:
       - name: Upgrade PostgreSQL schema
         run: uv run alembic upgrade head
 
+      - name: Initialize LangGraph checkpointer schema
+        run: uv run python scripts/setup_postgres_checkpointer.py
+
       - name: Backend tests and coverage gate
         run: uv run pytest --cov=. --cov-report=term-missing --cov-report=xml:coverage.xml -q
 
