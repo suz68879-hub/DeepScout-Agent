@@ -3,6 +3,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import os
 import sqlite3
 import sys
 from dataclasses import dataclass
@@ -147,7 +148,9 @@ def _parser() -> argparse.ArgumentParser:
         description="Migrate SQLite business data to PostgreSQL"
     )
     parser.add_argument("--source", required=True, type=Path)
-    parser.add_argument("--target", required=True)
+    target = parser.add_mutually_exclusive_group(required=True)
+    target.add_argument("--target")
+    target.add_argument("--target-env")
     parser.add_argument("--batch-size", type=int, default=500)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--resume-from")
@@ -156,13 +159,23 @@ def _parser() -> argparse.ArgumentParser:
 
 async def _main() -> int:
     args = _parser().parse_args()
-    result = await migrate_database(
-        args.source,
-        args.target,
-        batch_size=args.batch_size,
-        dry_run=args.dry_run,
-        resume_from=args.resume_from,
-    )
+    target = args.target
+    if args.target_env:
+        target = os.getenv(args.target_env)
+        if not target:
+            print(json.dumps({"error": "target environment variable is missing"}))
+            return 1
+    try:
+        result = await migrate_database(
+            args.source,
+            target,
+            batch_size=args.batch_size,
+            dry_run=args.dry_run,
+            resume_from=args.resume_from,
+        )
+    except Exception:
+        print(json.dumps({"error": "migration failed; inspect sanitized service logs"}))
+        return 1
     print(
         json.dumps(
             {
