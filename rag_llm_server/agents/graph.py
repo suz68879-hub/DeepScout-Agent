@@ -24,9 +24,12 @@ import sqlite3
 
 import aiosqlite
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.graph import END, START, StateGraph
+from psycopg.rows import dict_row
+from psycopg_pool import AsyncConnectionPool
 
-from config import settings
+from config import Config, settings
 from rag.provider import get_retriever
 from services.agent_llm import get_agent_llm
 from .evaluator import evaluate_round
@@ -36,6 +39,7 @@ from .stage_flow import PLANNING_STAGES, after_planner_route, maybe_advance_stag
 from .state import InterviewState
 
 _checkpoint_conn: aiosqlite.Connection | None = None
+_checkpoint_pool: AsyncConnectionPool | None = None
 _graph = None
 logger = logging.getLogger(__name__)
 
@@ -52,15 +56,33 @@ class _DaemonConnection(aiosqlite.Connection):
         self._thread.daemon = True
 
 
-async def make_checkpointer() -> AsyncSqliteSaver:
-    """SQLite checkpointer：与业务表同库（spec §6，LangGraph 自建 checkpoint 表）。"""
-    global _checkpoint_conn
-    db_path = settings.DATABASE_PATH
-    if os.path.dirname(db_path):
-        os.makedirs(os.path.dirname(db_path), exist_ok=True)
-    # 等价于 await aiosqlite.connect(db_path)，但以 daemon 线程连接（见 _DaemonConnection）
-    _checkpoint_conn = await _DaemonConnection(lambda: sqlite3.connect(db_path), 64)
-    return AsyncSqliteSaver(_checkpoint_conn)
+async def make_checkpointer(config: Config = settings):
+    """按业务 backend 创建独立 checkpointer；PostgreSQL 不执行运行时建表。"""
+    global _checkpoint_conn, _checkpoint_pool
+    if config.STORAGE_BACKEND == "sqlite":
+        db_path = config.DATABASE_PATH
+        if os.path.dirname(db_path):
+            os.makedirs(os.path.dirname(db_path), exist_ok=True)
+        _checkpoint_conn = await _DaemonConnection(lambda: sqlite3.connect(db_path), 64)
+        return AsyncSqliteSaver(_checkpoint_conn)
+
+    conninfo = config.DATABASE_URL.replace("postgresql+psycopg://", "postgresql://", 1)
+    pool = AsyncConnectionPool(
+        conninfo=conninfo,
+        min_size=1,
+        max_size=config.DATABASE_POOL_SIZE,
+        open=False,
+        kwargs={"autocommit": True, "prepare_threshold": 0, "row_factory": dict_row},
+    )
+    await pool.open()
+    try:
+        async with pool.connection() as connection:
+            await connection.execute("SELECT 1 FROM checkpoint_migrations LIMIT 1")
+    except BaseException:
+        await pool.close()
+        raise
+    _checkpoint_pool = pool
+    return AsyncPostgresSaver(pool)
 
 
 async def interviewer_node(state: InterviewState) -> dict:
@@ -172,9 +194,15 @@ def get_graph():
 
 async def close_graph() -> None:
     """释放 checkpointer 连接并清空图单例。"""
-    global _checkpoint_conn, _graph
+    global _checkpoint_conn, _checkpoint_pool, _graph
     connection = _checkpoint_conn
+    pool = _checkpoint_pool
     _checkpoint_conn = None
+    _checkpoint_pool = None
     _graph = None
-    if connection is not None:
-        await connection.close()
+    try:
+        if connection is not None:
+            await connection.close()
+    finally:
+        if pool is not None:
+            await pool.close()

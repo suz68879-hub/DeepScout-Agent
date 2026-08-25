@@ -45,6 +45,26 @@ async def test_graph_close_releases_checkpointer_connection(monkeypatch):
     assert graph_module._checkpoint_conn is None
 
 
+async def test_graph_close_releases_postgres_checkpointer_pool(monkeypatch):
+    import agents.graph as graph_module
+
+    class FakePool:
+        closed = False
+
+        async def close(self):
+            self.closed = True
+
+    pool = FakePool()
+    monkeypatch.setattr(graph_module, "_graph", object())
+    monkeypatch.setattr(graph_module, "_checkpoint_conn", None)
+    monkeypatch.setattr(graph_module, "_checkpoint_pool", pool, raising=False)
+
+    await graph_module.close_graph()
+
+    assert pool.closed is True
+    assert graph_module._checkpoint_pool is None
+
+
 async def test_shutdown_cold_tasks_cancels_and_clears_pending_tasks(monkeypatch):
     import services.interview_service as interview_service
 
