@@ -14,6 +14,8 @@ EXPECTED_TABLES = {
     "message",
     "interview_report",
     "recording",
+    "background_job",
+    "outbox_event",
 }
 
 

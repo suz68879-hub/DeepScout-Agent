@@ -46,6 +46,7 @@
 
 ### P3-T02 建立任务与 Outbox 数据模型
 
+- **实施状态**：已完成；空库迁移往返、旧 head 兼容、数据库约束/权限及 Alembic 无漂移验证通过。
 - **依赖/并行**：P3-T01。**规模/角色**：M，后端/DBA。
 - **预计文件**：`rag_llm_server/db/models.py`、新增 Alembic revision、`rag_llm_server/tests/test_job_schema.py`。
 - **契约与步骤**：`background_job` 含 owner/type/status/payload_ref/result_ref/attempt/max_attempts/timestamps/error；`outbox_event` 含 aggregate/event/payload/published_at/attempt/next_attempt_at；建立状态、队列扫描和业务唯一索引。
