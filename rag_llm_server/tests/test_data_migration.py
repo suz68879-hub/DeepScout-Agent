@@ -2,6 +2,7 @@ import hashlib
 import os
 import sqlite3
 import uuid
+from contextlib import closing
 from pathlib import Path
 
 import pytest
@@ -19,7 +20,7 @@ async def _build_source(path: Path, prefix: str) -> dict[str, str]:
     await storage.init()
     await storage.close()
     ids = {name: str(uuid.uuid4()) for name in ("user", "resume", "session", "report", "recording")}
-    with sqlite3.connect(path) as connection:
+    with closing(sqlite3.connect(path)) as connection:
         connection.execute(
             "INSERT INTO app_user VALUES (?, ?, ?, ?, ?)",
             (ids["user"], f"{prefix}_user", "hash", "user", "2026-01-01T00:00:00Z"),
@@ -44,6 +45,7 @@ async def _build_source(path: Path, prefix: str) -> dict[str, str]:
             "INSERT INTO recording VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (ids["recording"], ids["user"], "fixture.wav", "wav", f"recordings/{prefix}.wav", 16, "finished", None, '{"text":"fixture"}', None, ids["report"], "2026-01-01T00:05:00Z", "2026-01-01T00:06:00Z"),
         )
+        connection.commit()
     return ids
 
 

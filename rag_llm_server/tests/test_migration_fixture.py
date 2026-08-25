@@ -1,4 +1,5 @@
 import sqlite3
+from contextlib import closing
 
 import pytest
 
@@ -11,7 +12,7 @@ def test_generated_fixture_has_expected_synthetic_rows(tmp_path):
     counts = generate_fixture(path, users=2)
 
     assert sum(counts.values()) == 34
-    with sqlite3.connect(path) as connection:
+    with closing(sqlite3.connect(path)) as connection:
         usernames = [row[0] for row in connection.execute("SELECT username FROM app_user")]
         assert usernames == ["synthetic_user_0001", "synthetic_user_0002"]
         assert connection.execute("PRAGMA foreign_key_check").fetchall() == []

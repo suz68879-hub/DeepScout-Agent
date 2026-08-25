@@ -4,6 +4,7 @@ import json
 import sqlite3
 import sys
 import uuid
+from contextlib import closing
 from pathlib import Path
 
 if __package__ in (None, ""):
@@ -34,7 +35,7 @@ def generate_fixture(output: Path | str, users: int = 25) -> dict[str, int]:
         "interview_report": users * 2,
         "recording": users * 2,
     }
-    with sqlite3.connect(path) as connection:
+    with closing(sqlite3.connect(path)) as connection:
         connection.executescript(_SCHEMA)
         message_id = 1
         for user_number in range(1, users + 1):
@@ -143,6 +144,7 @@ def generate_fixture(output: Path | str, users: int = 25) -> dict[str, int]:
                         "2026-01-01T00:06:00Z",
                     ),
                 )
+        connection.commit()
     return counts
 
 
