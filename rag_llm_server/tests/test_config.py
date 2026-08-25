@@ -74,6 +74,16 @@ def _clear_database_env(monkeypatch):
         monkeypatch.delenv(key, raising=False)
 
 
+def _clear_redis_env(monkeypatch):
+    for key in (
+        "REDIS_URL",
+        "REDIS_MAX_CONNECTIONS",
+        "REDIS_SOCKET_TIMEOUT",
+        "REDIS_CONNECT_TIMEOUT",
+    ):
+        monkeypatch.delenv(key, raising=False)
+
+
 def test_database_config_defaults_to_sqlite(monkeypatch):
     _clear_database_env(monkeypatch)
     monkeypatch.setenv("DATABASE_PATH", "data/test.db")
@@ -192,3 +202,83 @@ def test_config_rejects_invalid_postgres_dsn_without_leaking_secret(monkeypatch,
         Config()
 
     assert "do-not-leak" not in str(exc_info.value)
+
+
+def test_redis_config_defaults_to_disabled_outside_production(monkeypatch):
+    _clear_database_env(monkeypatch)
+    _clear_redis_env(monkeypatch)
+
+    config = Config()
+
+    assert config.REDIS_URL is None
+    assert config.REDIS_MAX_CONNECTIONS == 20
+    assert config.REDIS_SOCKET_TIMEOUT == 2.0
+    assert config.REDIS_CONNECT_TIMEOUT == 2.0
+    assert config.REDIS_TLS is False
+    assert config.redis_log_target() is None
+
+
+def test_redis_config_parses_tls_url_and_hides_credentials(monkeypatch):
+    _clear_database_env(monkeypatch)
+    _clear_redis_env(monkeypatch)
+    monkeypatch.setenv("REDIS_URL", "rediss://app:super-secret@cache.internal:6380/2")
+    monkeypatch.setenv("REDIS_MAX_CONNECTIONS", "32")
+    monkeypatch.setenv("REDIS_SOCKET_TIMEOUT", "1.5")
+    monkeypatch.setenv("REDIS_CONNECT_TIMEOUT", "0.75")
+
+    config = Config()
+
+    assert config.REDIS_MAX_CONNECTIONS == 32
+    assert config.REDIS_SOCKET_TIMEOUT == 1.5
+    assert config.REDIS_CONNECT_TIMEOUT == 0.75
+    assert config.REDIS_TLS is True
+    assert config.redis_log_target() == "cache.internal:6380/2"
+    assert "super-secret" not in config.redis_log_target()
+
+
+@pytest.mark.parametrize(
+    "url",
+    ["http://cache.internal", "redis://", "not-a-url", "redis://cache/not-a-db"],
+)
+def test_redis_config_rejects_invalid_url_without_leaking_secret(monkeypatch, url):
+    _clear_database_env(monkeypatch)
+    _clear_redis_env(monkeypatch)
+    monkeypatch.setenv("REDIS_URL", url)
+
+    with pytest.raises(ValueError, match="REDIS_URL must be a Redis URL") as exc_info:
+        Config()
+
+    assert url not in str(exc_info.value)
+
+
+@pytest.mark.parametrize(
+    ("key", "value"),
+    [
+        ("REDIS_MAX_CONNECTIONS", "0"),
+        ("REDIS_SOCKET_TIMEOUT", "0"),
+        ("REDIS_CONNECT_TIMEOUT", "invalid"),
+        ("REDIS_CONNECT_TIMEOUT", "nan"),
+        ("REDIS_SOCKET_TIMEOUT", "inf"),
+    ],
+)
+def test_redis_pool_parameters_fail_fast(monkeypatch, key, value):
+    _clear_database_env(monkeypatch)
+    _clear_redis_env(monkeypatch)
+    monkeypatch.setenv(key, value)
+
+    with pytest.raises(ValueError, match=key):
+        Config()
+
+
+def test_production_requires_redis_url(monkeypatch):
+    _clear_database_env(monkeypatch)
+    _clear_redis_env(monkeypatch)
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("STORAGE_BACKEND", "postgres")
+    monkeypatch.setenv(
+        "DATABASE_URL",
+        "postgresql+psycopg://deepscout_app:safe-secret@db.internal/deepscout",
+    )
+
+    with pytest.raises(ValueError, match="REDIS_URL is required"):
+        Config()

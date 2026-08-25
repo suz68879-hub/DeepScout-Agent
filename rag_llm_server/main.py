@@ -22,6 +22,7 @@ from db import close_database, init_database
 from logging_config import configure_logging
 from middleware.request_context import RequestContextMiddleware
 from services.interview_service import shutdown_cold_tasks
+from services.redis_client import close_redis, init_redis
 from services.rtc_service import clear_rtc_locks
 from services.storage import close_storage, init_storage
 
@@ -32,6 +33,7 @@ logger = logging.getLogger(__name__)
 async def lifespan(_app: FastAPI):
     await init_database()
     try:
+        await init_redis()
         await init_storage()
         if not settings.RTC_CALLBACK_SECRET:
             raise RuntimeError("RTC_CALLBACK_SECRET is required")
@@ -64,6 +66,7 @@ async def lifespan(_app: FastAPI):
         await shutdown_cold_tasks()
         clear_rtc_locks()
         await close_graph()
+        await close_redis()
         await close_storage()
         await close_database()
 

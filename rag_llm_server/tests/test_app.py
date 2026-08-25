@@ -1,4 +1,5 @@
 from fastapi.middleware.cors import CORSMiddleware
+import pytest
 
 import main
 
@@ -36,16 +37,44 @@ async def test_lifespan_initializes_and_closes_resources(monkeypatch):
         events.append(name)
 
     monkeypatch.setattr(main, "init_storage", lambda: record("init_storage"))
+    monkeypatch.setattr(main, "init_redis", lambda: record("init_redis"))
     monkeypatch.setattr(main, "init_graph", lambda: record("init_graph"))
     monkeypatch.setattr(main, "shutdown_cold_tasks", lambda: record("shutdown_cold_tasks"))
     monkeypatch.setattr(main, "close_graph", lambda: record("close_graph"))
     monkeypatch.setattr(main, "close_storage", lambda: record("close_storage"))
+    monkeypatch.setattr(main, "close_redis", lambda: record("close_redis"))
     monkeypatch.setattr(main.registry, "render_all", lambda: None)
     monkeypatch.setattr("services.storage.get_tos_store", lambda: None)
 
     async with main.lifespan(main.create_app()):
-        assert events == ["init_storage", "init_graph"]
+        assert events == ["init_redis", "init_storage", "init_graph"]
 
     assert events == [
-        "init_storage", "init_graph", "shutdown_cold_tasks", "close_graph", "close_storage",
+        "init_redis", "init_storage", "init_graph", "shutdown_cold_tasks", "close_graph",
+        "close_redis", "close_storage",
+    ]
+
+
+async def test_lifespan_closes_redis_when_startup_fails(monkeypatch):
+    events = []
+
+    async def record(name):
+        events.append(name)
+
+    async def fail_storage():
+        raise RuntimeError("storage startup failed")
+
+    monkeypatch.setattr(main, "init_redis", lambda: record("init_redis"))
+    monkeypatch.setattr(main, "init_storage", fail_storage)
+    monkeypatch.setattr(main, "shutdown_cold_tasks", lambda: record("shutdown_cold_tasks"))
+    monkeypatch.setattr(main, "close_graph", lambda: record("close_graph"))
+    monkeypatch.setattr(main, "close_redis", lambda: record("close_redis"))
+    monkeypatch.setattr(main, "close_storage", lambda: record("close_storage"))
+
+    with pytest.raises(RuntimeError, match="storage startup failed"):
+        async with main.lifespan(main.create_app()):
+            pass
+
+    assert events == [
+        "init_redis", "shutdown_cold_tasks", "close_graph", "close_redis", "close_storage",
     ]

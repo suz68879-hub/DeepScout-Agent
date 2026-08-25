@@ -1,4 +1,5 @@
 import os
+from math import isfinite
 from urllib.parse import unquote, urlsplit
 
 from dotenv import load_dotenv
@@ -54,6 +55,20 @@ def _int_env(key: str, default: int, minimum: int) -> int:
     return value
 
 
+def _positive_float_env(key: str, default: float) -> float:
+    """读取正浮点环境变量，非法配置直接终止启动。"""
+    raw = os.getenv(key)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        value = float(raw)
+    except ValueError as exc:
+        raise ValueError(f"{key} must be a number") from exc
+    if not isfinite(value) or value <= 0:
+        raise ValueError(f"{key} must be greater than 0")
+    return value
+
+
 def _postgres_target(key: str, value: str, app_env: str) -> str:
     """校验 PostgreSQL DSN，并返回不含凭据的日志目标。"""
     try:
@@ -84,6 +99,25 @@ def _postgres_target(key: str, value: str, app_env: str) -> str:
     if port is not None:
         host = f"{host}:{port}"
     return f"{host}/{parsed.path.lstrip('/')}"
+
+
+def _redis_target(value: str) -> tuple[str, bool]:
+    """校验 Redis URL，并返回不含凭据的日志目标及 TLS 状态。"""
+    try:
+        parsed = urlsplit(value)
+        port = parsed.port
+    except ValueError as exc:
+        raise ValueError("REDIS_URL must be a Redis URL") from exc
+    if parsed.scheme not in {"redis", "rediss"} or not parsed.hostname:
+        raise ValueError("REDIS_URL must be a Redis URL")
+
+    host = parsed.hostname
+    if port is not None:
+        host = f"{host}:{port}"
+    database = parsed.path.lstrip("/") or "0"
+    if not database.isdigit():
+        raise ValueError("REDIS_URL must be a Redis URL")
+    return f"{host}/{database}", parsed.scheme == "rediss"
 
 
 class Config:
@@ -162,6 +196,10 @@ class Config:
         self.DATABASE_MAX_OVERFLOW = _int_env("DATABASE_MAX_OVERFLOW", 10, 0)
         self.DATABASE_POOL_TIMEOUT = _int_env("DATABASE_POOL_TIMEOUT", 30, 1)
         self.DATABASE_POOL_RECYCLE = _int_env("DATABASE_POOL_RECYCLE", 1800, -1)
+        self.REDIS_URL = os.getenv("REDIS_URL") or None
+        self.REDIS_MAX_CONNECTIONS = _int_env("REDIS_MAX_CONNECTIONS", 20, 1)
+        self.REDIS_SOCKET_TIMEOUT = _positive_float_env("REDIS_SOCKET_TIMEOUT", 2.0)
+        self.REDIS_CONNECT_TIMEOUT = _positive_float_env("REDIS_CONNECT_TIMEOUT", 2.0)
 
         requires_postgres = self.STORAGE_BACKEND == "postgres" or self.APP_ENV == "production"
         if requires_postgres and not self.DATABASE_URL:
@@ -179,6 +217,13 @@ class Config:
                 self.APP_ENV,
             )
 
+        if self.APP_ENV == "production" and not self.REDIS_URL:
+            raise ValueError("REDIS_URL is required in production")
+        self._redis_log_target = None
+        self.REDIS_TLS = False
+        if self.REDIS_URL:
+            self._redis_log_target, self.REDIS_TLS = _redis_target(self.REDIS_URL)
+
         self.DATABASE_PATH = (
             os.getenv("DATABASE_PATH", "data/interview.db")
             if self.STORAGE_BACKEND == "sqlite"
@@ -188,6 +233,10 @@ class Config:
     def database_log_target(self) -> str | None:
         """返回可安全写入日志的数据库主机与库名。"""
         return self._database_log_target
+
+    def redis_log_target(self) -> str | None:
+        """返回可安全写入日志的 Redis 主机与数据库编号。"""
+        return self._redis_log_target
 
     def agent_endpoint_id(self, agent: str) -> str:
         """按 Agent 名取端点 ID；未配置或未知 Agent 回落到默认端点。"""
