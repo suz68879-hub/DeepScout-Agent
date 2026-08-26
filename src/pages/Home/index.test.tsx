@@ -3,13 +3,9 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import { Message } from '@arco-design/web-react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import * as restApi from '@/api/rest';
 import { MAX_UPLOAD_BYTES } from '@/domain/recording/types';
 import HomePage from './index';
-
-vi.mock('@/domain/recording/types', async (importOriginal) => {
-  const mod = await importOriginal<typeof import('@/domain/recording/types')>();
-  return { ...mod, POLL_INTERVAL_MS: 10 };
-});
 
 function jsonResponse(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
@@ -24,6 +20,7 @@ const reportRow = {
 
 afterEach(() => {
   cleanup();
+  localStorage.clear();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
@@ -93,7 +90,9 @@ describe('HomePage', () => {
         if (u.includes('/api/reports')) return Promise.resolve(jsonResponse({ items: [], next_cursor: null }));
         if (u.includes('/api/resume')) return Promise.resolve(jsonResponse({ detail: '尚无简历' }, 404));
         if (u.includes('/api/recording/upload')) {
-          return Promise.resolve(jsonResponse({ recording_id: 'rec-1', status: 'processing' }));
+          return Promise.resolve(jsonResponse({
+            recording_id: 'rec-1', job_id: 'job-1', status: 'processing',
+          }, 202));
         }
         for (const [frag, body] of Object.entries(recordingResponses)) {
           if (u.includes(frag)) return Promise.resolve(jsonResponse(body));
@@ -103,8 +102,11 @@ describe('HomePage', () => {
     };
 
     it('上传成功后轮询完成跳转报告', async () => {
-      stubHomeFetch({
-        '/api/recording/rec-1': { recording_id: 'rec-1', status: 'done', report_id: 'rep-1', error: null },
+      stubHomeFetch({});
+      vi.spyOn(restApi, 'pollJob').mockResolvedValue({
+        job_id: 'job-1', type: 'recording_analysis', status: 'succeeded', attempt: 1,
+        created_at: '2026-08-26T10:00:00Z', started_at: null, finished_at: null,
+        result_ref: { report_id: 'rep-1' }, error_code: null,
       });
       render(
         <MemoryRouter>
@@ -122,11 +124,11 @@ describe('HomePage', () => {
     });
 
     it('轮询失败显示错误并可重试', async () => {
-      stubHomeFetch({
-        '/api/recording/rec-1': {
-          recording_id: 'rec-1', status: 'failed', report_id: null,
-          error: '语音识别失败（45000001）：请求参数无效',
-        },
+      stubHomeFetch({});
+      vi.spyOn(restApi, 'pollJob').mockResolvedValue({
+        job_id: 'job-1', type: 'recording_analysis', status: 'failed', attempt: 1,
+        created_at: '2026-08-26T10:00:00Z', started_at: null, finished_at: null,
+        result_ref: null, error_code: 'PROVIDER_ERROR',
       });
       render(
         <MemoryRouter>
@@ -136,8 +138,44 @@ describe('HomePage', () => {
       const file = new File(['audio'], 'a.wav', { type: 'audio/wav' });
       fireEvent.change(screen.getByLabelText('选择录音文件'), { target: { files: [file] } });
       fireEvent.click(screen.getByRole('button', { name: '上传并分析' }));
-      await waitFor(() => expect(screen.getByText(/语音识别失败/)).toBeTruthy());
+      await waitFor(() => expect(screen.getByText(/AI 服务暂时不可用，请稍后重试/)).toBeTruthy());
       expect(screen.getByRole('button', { name: '上传并分析' })).toBeTruthy();
+      expect(localStorage.getItem('deepscout:recording-job')).toBeNull();
+    });
+
+    it('刷新后从已保存的 job_id 恢复查询并跳转报告', async () => {
+      localStorage.setItem('deepscout:recording-job', JSON.stringify({
+        job_id: 'job-saved', recording_id: 'rec-saved',
+      }));
+      stubHomeFetch({});
+      const poll = vi.spyOn(restApi, 'pollJob').mockResolvedValue({
+        job_id: 'job-saved', type: 'recording_analysis', status: 'succeeded', attempt: 1,
+        created_at: '2026-08-26T10:00:00Z', started_at: null, finished_at: null,
+        result_ref: { report_id: 'rep-saved' }, error_code: null,
+      });
+      render(
+        <MemoryRouter>
+          <Routes>
+            <Route path="/" element={<HomePage />} />
+            <Route path="/report/:reportId" element={<div>restored-report</div>} />
+          </Routes>
+        </MemoryRouter>
+      );
+      await waitFor(() => expect(screen.getByText('restored-report')).toBeTruthy());
+      expect(poll).toHaveBeenCalledWith('job-saved', expect.any(AbortSignal));
+      expect(localStorage.getItem('deepscout:recording-job')).toBeNull();
+    });
+
+    it('网络查询失败时保留 job_id 并允许继续查询', async () => {
+      localStorage.setItem('deepscout:recording-job', JSON.stringify({
+        job_id: 'job-saved', recording_id: 'rec-saved',
+      }));
+      stubHomeFetch({});
+      vi.spyOn(restApi, 'pollJob').mockRejectedValue(new TypeError('network down'));
+      render(<MemoryRouter><HomePage /></MemoryRouter>);
+      await waitFor(() => expect(screen.getByText(/任务查询中断/)).toBeTruthy());
+      expect(screen.getByRole('button', { name: '继续查询' })).toBeTruthy();
+      expect(localStorage.getItem('deepscout:recording-job')).not.toBeNull();
     });
 
     it('超过 200MB 的录音给出错误提示', async () => {

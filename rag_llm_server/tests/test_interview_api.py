@@ -3,6 +3,7 @@ import pytest
 from fastapi import HTTPException
 
 import api.interview as api
+from services.jobs.types import JobStatus
 
 
 def _fake_session(status="running", **extra):
@@ -61,6 +62,45 @@ def _mock_finish_chain(monkeypatch, session):
     monkeypatch.setattr(api, "generate_report", _ainvoke(_FakeReportModel()))
     monkeypatch.setattr(api, "save_report", _ainvoke("r1"))
     monkeypatch.setattr(api, "get_agent_llm", lambda agent: "fake-llm")
+    monkeypatch.setattr(api.settings, "ENABLE_LEGACY_SYNC_FINISH", True, raising=False)
+
+
+async def test_finish_returns_202_durable_job_contract(monkeypatch):
+    session = _fake_session()
+    monkeypatch.setattr(api.settings, "ENABLE_LEGACY_SYNC_FINISH", False, raising=False)
+    monkeypatch.setattr(api.storage, "session_get", _ainvoke(session))
+    fake_graph = _FakeGraph(
+        {"session_id": session["id"], "position": session["position"], "messages": []}
+    )
+    monkeypatch.setattr(api, "get_graph", lambda: fake_graph)
+
+    class Job:
+        id = "33333333-3333-3333-3333-333333333333"
+        status = JobStatus.PENDING
+
+    async def schedule(session_id, owner_id):
+        assert (session_id, owner_id) == ("s1", "u1")
+        return Job()
+
+    monkeypatch.setattr(api, "schedule_finish_job", schedule, raising=False)
+
+    result = await api.finish_interview(
+        api.FinishRequest(session_id="s1"), {"id": "u1"}
+    )
+
+    assert result == {
+        "job_id": "33333333-3333-3333-3333-333333333333",
+        "session_id": "s1",
+        "status": "pending",
+    }
+    assert fake_graph.updates[-1][1:] == ({"stage": "finish"}, {"as_node": "planner"})
+
+
+def test_finish_route_declares_202_accepted():
+    route = next(
+        route for route in api.router.routes if getattr(route, "path", "") == "/api/interview/finish"
+    )
+    assert route.status_code == 202
 
 
 async def test_start_scopes_idempotency_to_validated_body(monkeypatch):

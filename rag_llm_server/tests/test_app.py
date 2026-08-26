@@ -22,6 +22,10 @@ def test_debug_routes_can_be_enabled(monkeypatch):
     assert "/debug/rag" in paths
 
 
+def test_public_job_query_route_is_registered():
+    assert "/api/jobs/{job_id}" in _paths(main.create_app())
+
+
 def test_cors_uses_configured_origins_with_credentials(monkeypatch):
     origins = ("https://one.example", "https://two.example")
     monkeypatch.setattr(main.settings, "CORS_ORIGINS", origins)

@@ -9,9 +9,10 @@ from agents.graph import get_graph
 from agents.prompts.registry import registry
 from agents.reporter import generate_report
 from api.auth import get_current_user
+from config import settings
 from middleware.idempotency import execute_idempotent
 from services.agent_llm import get_agent_llm
-from services.interview_service import session_config
+from services.interview_service import schedule_finish_job, session_config
 from services.report_service import save_report
 from services.storage import storage
 from services.clock import utc_now
@@ -84,39 +85,49 @@ async def start_interview(
     )
 
 
-@router.post("/finish")
+@router.post("/finish", status_code=202)
 async def finish_interview(
     body: FinishRequest,
     user: dict = Depends(get_current_user),
     request: Request = None,
 ):
-    """结束会话 → 同步生成报告（≤60s）→ 返回报告 ID。"""
+    """Accept durable report generation and return its queryable Job ID."""
     async def operation():
         session = await storage.session_get(user["id"], body.session_id)
         if not session:
             raise HTTPException(status_code=404, detail="会话不存在")
-        if session.get("status") == "finished":
-            # 幂等守卫：无 Idempotency-Key 的旧客户端仍由业务约束阻止重复报告。
-            raise HTTPException(status_code=409, detail="会话已结束，请勿重复请求")
+        if settings.ENABLE_LEGACY_SYNC_FINISH:
+            if session.get("status") == "finished":
+                raise HTTPException(status_code=409, detail="会话已结束，请勿重复请求")
+            config = session_config(body.session_id)
+            graph = get_graph()
+            await graph.aupdate_state(config, {"stage": "finish"}, as_node="planner")
+            state = dict((await graph.aget_state(config)).values or {})
+            if state.get("session_id") != body.session_id:
+                raise HTTPException(status_code=409, detail="会话状态不存在或已过期")
+            report = await generate_report(state, get_agent_llm("reporter"))
+            report_id = await save_report(session, report.model_dump(), state)
+            await storage.session_update(user["id"], body.session_id, {
+                "status": "finished", "stage": "finish", "ended_at": utc_now(),
+            })
+            return {
+                "session_id": body.session_id,
+                "report_id": report_id,
+                "status": "finished",
+            }
+
         config = session_config(body.session_id)
-        # as_node 必填：多节点共享 InterviewState 通道，缺省路由会报
-        # InvalidUpdateError: Ambiguous update（graph.py 注释、main.py 热路径同约定）。
-        # 归属 planner：stage 由其产出；若此后恢复执行，条件边会按 finish 路由到 reporter。
         graph = get_graph()
-        await graph.aupdate_state(config, {"stage": "finish"}, as_node="planner")
-        state = dict((await graph.aget_state(config)).values or {})
-        if state.get("session_id") != body.session_id:
-            # checkpoint 丢失/新建空状态时直接生成会出静默全零报告
-            raise HTTPException(status_code=409, detail="会话状态不存在或已过期")
-        report = await generate_report(state, get_agent_llm("reporter"))
-        report_id = await save_report(session, report.model_dump(), state)
-        await storage.session_update(user["id"], body.session_id, {
-            "status": "finished", "stage": "finish", "ended_at": utc_now(),
-        })
+        if session.get("status") != "finished":
+            await graph.aupdate_state(config, {"stage": "finish"}, as_node="planner")
+            state = dict((await graph.aget_state(config)).values or {})
+            if state.get("session_id") != body.session_id:
+                raise HTTPException(status_code=409, detail="会话状态不存在或已过期")
+        job = await schedule_finish_job(body.session_id, user["id"])
         return {
+            "job_id": str(job.id),
             "session_id": body.session_id,
-            "report_id": report_id,
-            "status": "finished",
+            "status": "pending",
         }
 
     return await execute_idempotent(

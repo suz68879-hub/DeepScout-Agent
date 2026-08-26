@@ -70,6 +70,7 @@ def _clear_database_env(monkeypatch):
         "DATABASE_MAX_OVERFLOW",
         "DATABASE_POOL_TIMEOUT",
         "DATABASE_POOL_RECYCLE",
+        "ENABLE_LEGACY_SYNC_FINISH",
     ):
         monkeypatch.delenv(key, raising=False)
 
@@ -95,6 +96,7 @@ def test_database_config_defaults_to_sqlite(monkeypatch):
     assert config.STORAGE_BACKEND == "sqlite"
     assert config.DATABASE_PATH == "data/test.db"
     assert config.DATABASE_URL is None
+    assert config.ENABLE_LEGACY_SYNC_FINISH is False
 
 
 @pytest.mark.parametrize(

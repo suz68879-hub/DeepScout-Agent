@@ -46,7 +46,7 @@ async def test_upload_happy_path(monkeypatch):
 
     async def fake_upload(user_id, filename, ext, raw, position):
         captured.update({"filename": filename, "ext": ext, "raw": raw, "position": position})
-        return {"id": "r1", "status": "processing"}
+        return {"id": "r1", "job_id": "j1", "status": "processing"}
 
     monkeypatch.setattr(rec_api, "upload_recording", fake_upload)
     # 走真实请求管线（TestClient）而非直接调用：position 缺省经 FastAPI 依赖注入
@@ -62,8 +62,8 @@ async def test_upload_happy_path(monkeypatch):
         "/api/recording/upload",
         files={"file": ("a.wav", b"RIFF", "audio/wav")},
     )
-    assert resp.status_code == 200
-    assert resp.json() == {"recording_id": "r1", "status": "processing"}
+    assert resp.status_code == 202
+    assert resp.json() == {"recording_id": "r1", "job_id": "j1", "status": "processing"}
     assert captured["filename"] == "a.wav" and captured["ext"] == "wav"
     assert captured["raw"] == b"RIFF" and captured["position"] == "真实面试录音"
 
@@ -72,7 +72,7 @@ async def test_upload_idempotency_fingerprint_contains_hash_not_audio(monkeypatc
     captured = {}
 
     async def fake_upload(user_id, filename, ext, raw, position):
-        return {"id": "r1", "status": "processing"}
+        return {"id": "r1", "job_id": "j1", "status": "processing"}
 
     async def fake_execute(request, user, body, operation):
         captured.update({"request": request, "user": user, "body": body})
@@ -87,7 +87,7 @@ async def test_upload_idempotency_fingerprint_contains_hash_not_audio(monkeypatc
         user=TEST_USER,
         request=request,
     )
-    assert result == {"recording_id": "r1", "status": "processing"}
+    assert result == {"recording_id": "r1", "job_id": "j1", "status": "processing"}
     assert captured == {
         "request": request,
         "user": TEST_USER,

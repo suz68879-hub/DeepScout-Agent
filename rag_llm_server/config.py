@@ -175,6 +175,7 @@ class Config:
         ("http://localhost:3000", "http://127.0.0.1:3000"),
     )
     ENABLE_DEBUG_ROUTES = _bool_env("ENABLE_DEBUG_ROUTES", False)
+    ENABLE_LEGACY_SYNC_FINISH = _bool_env("ENABLE_LEGACY_SYNC_FINISH", False)
     AUTH_COOKIE_SECURE = _bool_env("AUTH_COOKIE_SECURE", False)
     BOOTSTRAP_ADMIN_USERNAME = os.getenv("BOOTSTRAP_ADMIN_USERNAME")
     BOOTSTRAP_ADMIN_PASSWORD = os.getenv("BOOTSTRAP_ADMIN_PASSWORD")
@@ -228,6 +229,9 @@ class Config:
 
     def __init__(self) -> None:
         self.APP_ENV = os.getenv("APP_ENV", "development").strip().lower()
+        self.ENABLE_LEGACY_SYNC_FINISH = _bool_env(
+            "ENABLE_LEGACY_SYNC_FINISH", False
+        )
         if self.APP_ENV not in {"development", "test", "production"}:
             raise ValueError("APP_ENV must be development, test, or production")
 

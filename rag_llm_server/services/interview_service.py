@@ -262,3 +262,42 @@ async def schedule_cold_path(
             session_id=session_id,
             trigger_id=trigger_id,
         )
+
+
+async def enqueue_finish_job(
+    db_session: AsyncSession,
+    *,
+    owner_id: uuid.UUID | str,
+    session_id: uuid.UUID | str,
+) -> JobRecord:
+    """Atomically create the one durable finish Job and Outbox per session."""
+    try:
+        owner_uuid = uuid.UUID(str(owner_id))
+        session_uuid = uuid.UUID(str(session_id))
+    except (TypeError, ValueError, AttributeError):
+        raise ColdPathStateError("INTERVIEW_SESSION_NOT_FOUND") from None
+    interview = await PostgresRepository(db_session).session_get(
+        str(owner_uuid), str(session_uuid)
+    )
+    if interview is None:
+        raise ColdPathStateError("INTERVIEW_SESSION_NOT_FOUND")
+    return await JobDispatcher(db_session).enqueue(
+        job_type=JobType.INTERVIEW_FINISH,
+        owner_id=owner_uuid,
+        payload_ref={
+            "schema_version": 1,
+            "session_id": str(session_uuid),
+            "step": "finish",
+        },
+        idempotency_key=f"interview:{session_uuid}:finish",
+    )
+
+
+async def schedule_finish_job(
+    session_id: str,
+    owner_id: str,
+) -> JobRecord:
+    async with session_scope() as db_session:
+        return await enqueue_finish_job(
+            db_session, owner_id=owner_id, session_id=session_id
+        )

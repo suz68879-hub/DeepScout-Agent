@@ -1,5 +1,14 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { ApiError, getJson, getText, postFile, postForm, postJson } from './rest';
+import {
+  ApiError,
+  getJson,
+  getText,
+  jobErrorMessage,
+  pollJob,
+  postFile,
+  postForm,
+  postJson,
+} from './rest';
 import { AIGC_PROXY_HOST } from '@/config';
 
 const okJson = (body: unknown) =>
@@ -77,5 +86,45 @@ describe('rest client', () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('Bad Gateway', { status: 502 })));
     const err = await getJson('/api/reports').catch((e: unknown) => e);
     expect((err as ApiError).message).toContain('502');
+  });
+
+  it('以 2 秒起步并指数退避到最多 10 秒，终态后停止轮询', async () => {
+    vi.useFakeTimers();
+    const statuses = ['pending', 'running', 'running', 'running', 'succeeded'];
+    const fn = vi.fn().mockImplementation(() => Promise.resolve(okJson({
+      job_id: 'job-1',
+      type: 'interview_finish',
+      status: statuses.shift(),
+      attempt: 1,
+      created_at: '2026-08-26T10:00:00+00:00',
+      started_at: null,
+      finished_at: null,
+      result_ref: { report_id: 'report-1' },
+      error_code: null,
+    })));
+    vi.stubGlobal('fetch', fn);
+
+    const result = pollJob('job-1');
+    await [2000, 4000, 8000, 10000, 10000].reduce(
+      (previous, delay) => previous.then(
+        () => vi.advanceTimersByTimeAsync(delay).then(() => undefined)
+      ),
+      Promise.resolve()
+    );
+
+    await expect(result).resolves.toMatchObject({ status: 'succeeded' });
+    expect(fn).toHaveBeenCalledTimes(5);
+    vi.useRealTimers();
+  });
+
+  it('拒绝结构不合法的任务响应，且错误码只映射为安全文案', async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(okJson({ status: 'succeeded' })));
+    const result = pollJob('job-1');
+    const rejected = expect(result).rejects.toThrow('任务响应格式无效');
+    await vi.advanceTimersByTimeAsync(2000);
+    await rejected;
+    expect(jobErrorMessage('MODEL_PROVIDER_SECRET_DETAIL')).toBe('任务处理失败，请稍后重试');
+    vi.useRealTimers();
   });
 });

@@ -118,6 +118,7 @@
 
 ### P3-T08 发布异步任务 API 与前端轮询
 
+- **实施状态**：已完成；面试结束与录音上传发布 202/持久 job_id，owner-scoped Job API、2～10 秒退避轮询、刷新恢复和安全错误映射验收通过；前端 97 passed、E2E 3 passed，后端 568 passed/17 skipped、覆盖率 82.89%（门槛 81%）。
 - **依赖/并行**：P3-T06、P3-T07。**规模/角色**：M，前后端。
 - **预计文件**：`rag_llm_server/api/interview.py`、`rag_llm_server/api/recording.py`、`rag_llm_server/api/jobs.py`、`src/api/rest.ts`、`src/domain/interview/types.ts`。
 - **契约与步骤**：实现冻结的 202/job 查询响应；job 查询 owner-scoped；前端以 2 秒起步、最大 10 秒退避轮询，终态停止；页面刷新后用 job_id 恢复。
@@ -127,9 +128,9 @@
 
 #### 检查点 C：P3-T06～P3-T08
 
-- [ ] 生产 API 无 `_cold_tasks`、`_running_tasks` 或后台 create_task。
-- [ ] 面试结束与录音任务均返回持久 job_id。
-- [ ] 页面刷新和 API/worker 重启后仍能查询终态。
+- [x] 生产 API 无 `_cold_tasks`、`_running_tasks` 或后台 create_task。
+- [x] 面试结束与录音任务均返回持久 job_id。
+- [x] 页面刷新和 API/worker 重启后仍能查询终态。
 
 ### P3-T09 增加重试与死信队列
 

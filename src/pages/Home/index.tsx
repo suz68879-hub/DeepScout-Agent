@@ -1,17 +1,39 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Button, Message } from '@arco-design/web-react';
 import { useNavigate } from 'react-router-dom';
-import { getJson, postFileForm, postJson } from '@/api/rest';
+import { ApiError, getJson, jobErrorMessage, pollJob, postFileForm, postJson } from '@/api/rest';
 import ResumePanel from '@/components/ResumePanel';
 import type { StartResponse } from '@/domain/interview/types';
-import type { RecordingStatusResponse } from '@/domain/recording/types';
-import { MAX_UPLOAD_BYTES, POLL_INTERVAL_MS } from '@/domain/recording/types';
+import type { RecordingUploadResponse } from '@/domain/recording/types';
+import { MAX_UPLOAD_BYTES } from '@/domain/recording/types';
 import type { ReportPage, ReportRow } from '@/domain/report/types';
 import { overallFromReport } from '@/domain/report/types';
 import type { ResumeRow } from '@/domain/resume/types';
 import styles from './index.module.less';
 
 const POSITION_PRESETS = ['Java后端', 'AI Agent 应用开发', '后端开发（Go）', '大数据开发'];
+const RECORDING_JOB_KEY = 'deepscout:recording-job';
+
+interface SavedRecordingJob {
+  job_id: string;
+  recording_id: string;
+}
+
+function loadRecordingJob(): SavedRecordingJob | null {
+  try {
+    const value = JSON.parse(localStorage.getItem(RECORDING_JOB_KEY) ?? 'null') as unknown;
+    if (!value || typeof value !== 'object') return null;
+    const saved = value as Record<string, unknown>;
+    if (typeof saved.job_id !== 'string' || typeof saved.recording_id !== 'string') {
+      localStorage.removeItem(RECORDING_JOB_KEY);
+      return null;
+    }
+    return { job_id: saved.job_id, recording_id: saved.recording_id };
+  } catch {
+    localStorage.removeItem(RECORDING_JOB_KEY);
+    return null;
+  }
+}
 
 export default function HomePage() {
   const navigate = useNavigate();
@@ -46,42 +68,54 @@ export default function HomePage() {
   type RecordingState =
     | { status: 'idle' }
     | { status: 'uploading' }
-    | { status: 'processing'; id: string }
-    | { status: 'failed'; error: string };
+    | { status: 'processing'; saved: SavedRecordingJob }
+    | { status: 'failed'; error: string; saved?: SavedRecordingJob };
 
   const [recordingFile, setRecordingFile] = useState<File | null>(null);
   const [recording, setRecording] = useState<RecordingState>({ status: 'idle' });
-  const pollTimer = useRef<number | null>(null);
+  const pollController = useRef<AbortController | null>(null);
 
-  useEffect(
-    () => () => {
-      if (pollTimer.current !== null) window.clearInterval(pollTimer.current);
-    },
-    []
-  );
-
-  const stopPolling = () => {
-    if (pollTimer.current !== null) window.clearInterval(pollTimer.current);
-    pollTimer.current = null;
-  };
-
-  const pollRecording = async (id: string) => {
+  const pollRecording = useCallback(async (saved: SavedRecordingJob, signal: AbortSignal) => {
+    setRecording({ status: 'processing', saved });
     try {
-      const s = await getJson<RecordingStatusResponse>(`/api/recording/${id}`);
-      if (s.status === 'done' && s.report_id) {
-        stopPolling();
-        navigate(`/report/${s.report_id}`);
-      } else if (s.status === 'failed') {
-        stopPolling();
-        setRecording({ status: 'failed', error: s.error ?? '录音分析失败' });
+      const job = await pollJob(saved.job_id, signal);
+      localStorage.removeItem(RECORDING_JOB_KEY);
+      const reportId = job.result_ref?.report_id;
+      if (job.status === 'succeeded' && typeof reportId === 'string') {
+        navigate(`/report/${reportId}`);
+      } else {
+        setRecording({ status: 'failed', error: jobErrorMessage(job.error_code) });
       }
     } catch (e) {
-      stopPolling();
-      setRecording({ status: 'failed', error: e instanceof Error ? e.message : '录音状态查询失败' });
+      if (signal.aborted) return;
+      const shouldRetain = !(e instanceof ApiError) || e.status >= 500;
+      if (!shouldRetain) localStorage.removeItem(RECORDING_JOB_KEY);
+      setRecording({
+        status: 'failed',
+        error: '任务查询中断，请检查网络后继续查询',
+        saved: shouldRetain ? saved : undefined,
+      });
     }
-  };
+  }, [navigate]);
+
+  const beginPolling = useCallback((saved: SavedRecordingJob) => {
+    pollController.current?.abort();
+    const controller = new AbortController();
+    pollController.current = controller;
+    void pollRecording(saved, controller.signal);
+  }, [pollRecording]);
+
+  useEffect(() => {
+    const saved = loadRecordingJob();
+    if (saved) beginPolling(saved);
+    return () => pollController.current?.abort();
+  }, [beginPolling]);
 
   const startRecordingAnalysis = async () => {
+    if (recording.status === 'failed' && recording.saved) {
+      beginPolling(recording.saved);
+      return;
+    }
     if (!recordingFile) {
       Message.warning('请先选择录音文件');
       return;
@@ -92,15 +126,14 @@ export default function HomePage() {
     }
     setRecording({ status: 'uploading' });
     try {
-      const res = await postFileForm<{ recording_id: string; status: string }>(
+      const res = await postFileForm<RecordingUploadResponse>(
         '/api/recording/upload',
         recordingFile,
         { position }
       );
-      setRecording({ status: 'processing', id: res.recording_id });
-      pollTimer.current = window.setInterval(() => {
-        void pollRecording(res.recording_id);
-      }, POLL_INTERVAL_MS);
+      const saved = { recording_id: res.recording_id, job_id: res.job_id };
+      localStorage.setItem(RECORDING_JOB_KEY, JSON.stringify(saved));
+      beginPolling(saved);
     } catch (e) {
       setRecording({ status: 'failed', error: e instanceof Error ? e.message : '录音上传失败' });
     }
@@ -165,14 +198,18 @@ export default function HomePage() {
             disabled={recording.status === 'processing'}
             onClick={startRecordingAnalysis}
           >
-            {recording.status === 'processing' ? '分析中' : '上传并分析'}
+            {recording.status === 'processing'
+              ? '分析中'
+              : recording.status === 'failed' && recording.saved
+                ? '继续查询'
+                : '上传并分析'}
           </Button>
         </div>
         {recording.status === 'processing' ? (
           <div className={styles.recordingHint}>转写分析中，完成后自动跳转报告（约 1-3 分钟）</div>
         ) : null}
         {recording.status === 'failed' ? (
-          <div className={styles.recordingError}>{recording.error}，点击「上传并分析」重试</div>
+          <div className={styles.recordingError}>{recording.error}</div>
         ) : null}
       </section>
 

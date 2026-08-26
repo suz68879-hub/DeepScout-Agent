@@ -129,6 +129,37 @@ async def test_enqueue_cold_path_rejects_cross_owner_session(interview_job_runti
             )
 
 
+async def test_enqueue_finish_job_returns_same_persisted_job_for_session(
+    interview_job_runtime,
+):
+    runtime, owner_id, session_id = interview_job_runtime
+    async with runtime.session_scope() as session:
+        first = await isv.enqueue_finish_job(
+            session, owner_id=owner_id, session_id=session_id
+        )
+        repeated = await isv.enqueue_finish_job(
+            session, owner_id=owner_id, session_id=session_id
+        )
+
+    assert repeated.id == first.id
+    assert first.payload_ref == {
+        "schema_version": 1,
+        "session_id": str(session_id),
+        "step": "finish",
+    }
+    async with runtime.session_scope() as session:
+        assert await session.scalar(
+            select(func.count())
+            .select_from(BackgroundJob)
+            .where(BackgroundJob.id == first.id)
+        ) == 1
+        assert await session.scalar(
+            select(func.count())
+            .select_from(OutboxEvent)
+            .where(OutboxEvent.aggregate_id == first.id)
+        ) == 1
+
+
 def test_interview_service_has_no_process_local_cold_task_registry():
     assert not hasattr(isv, "_cold_tasks")
     assert not hasattr(isv, "shutdown_cold_tasks")

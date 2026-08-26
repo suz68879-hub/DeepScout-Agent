@@ -1,11 +1,11 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useSelector } from 'react-redux';
 import { Button, Message, Spin } from '@arco-design/web-react';
 import AiAvatarCard from '@/components/AiAvatarCard';
 import ScoreOverlay from '@/components/ScoreOverlay';
 import StageIndicator from '@/components/StageIndicator';
-import { ApiError, postJson } from '@/api/rest';
+import { ApiError, jobErrorMessage, pollJob, postJson } from '@/api/rest';
 import type { FinishResponse } from '@/domain/interview/types';
 import { stageMeta } from '@/domain/interview/stageDisplay';
 import { isE2EMode, useE2ESessionDriver } from '@/lib/e2eMock';
@@ -36,6 +36,11 @@ export default function InterviewPage() {
   const isJoined = useSelector((state: RootState) => state.room.isJoined);
   const [joinError, setJoinError] = useState<string | null>(null);
   const [hangingUp, setHangingUp] = useState(false);
+  const jobStorageKey = `deepscout:interview-job:${sessionId ?? ''}`;
+  const savedJobId = sessionId ? localStorage.getItem(jobStorageKey) : null;
+  const [pendingJob, setPendingJob] = useState<{ jobId: string; revision: number } | null>(
+    savedJobId ? { jobId: savedJobId, revision: 0 } : null
+  );
   const { isAudioPublished, isVideoPublished, switchMic, switchCamera } = useDeviceState();
   const { state } = useSessionState(sessionId ?? '');
 
@@ -49,13 +54,13 @@ export default function InterviewPage() {
 
   // 场景配置就绪后自动进房（RTC 参数走保留接口 /getScenes，Plan 3 Ruling R3）
   useEffect(() => {
-    if (!isJoined && !joining && rtc.AppId) {
+    if (!pendingJob && !isJoined && !joining && rtc.AppId) {
       join().catch((e: unknown) => {
         setJoinError(e instanceof Error ? e.message : '进房失败');
       });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isJoined, joining, rtc.AppId]);
+  }, [pendingJob, isJoined, joining, rtc.AppId]);
 
   // 离开页面时退房（结束面试必须显式走 /finish，退房不结束会话）
   useEffect(() => () => {
@@ -92,22 +97,62 @@ export default function InterviewPage() {
     }
   };
 
-  const hangup = async () => {
+  const monitorFinish = useCallback(async (jobId: string, signal: AbortSignal) => {
     setHangingUp(true);
+    try {
+      const job = await pollJob(jobId, signal);
+      localStorage.removeItem(jobStorageKey);
+      setPendingJob(null);
+      const reportId = job.result_ref?.report_id;
+      if (job.status === 'succeeded' && typeof reportId === 'string') {
+        navigate(`/report/${reportId}`);
+      } else {
+        Message.error(jobErrorMessage(job.error_code));
+        navigate('/');
+      }
+    } catch (e) {
+      if (signal.aborted) return;
+      if (e instanceof ApiError && e.status < 500) {
+        localStorage.removeItem(jobStorageKey);
+        setPendingJob(null);
+        navigate('/');
+      }
+      Message.error('任务查询中断，请检查网络后重试');
+    } finally {
+      if (!signal.aborted) setHangingUp(false);
+    }
+  }, [jobStorageKey, navigate]);
+
+  useEffect(() => {
+    if (!pendingJob) return undefined;
+    leaveRoom();
+    const controller = new AbortController();
+    void monitorFinish(pendingJob.jobId, controller.signal);
+    return () => controller.abort();
+  }, [pendingJob, monitorFinish]);
+
+  const requestPolling = (jobId: string) => {
+    setPendingJob((current) => ({ jobId, revision: (current?.revision ?? 0) + 1 }));
+  };
+
+  const hangup = async () => {
+    const existing = localStorage.getItem(jobStorageKey);
+    if (existing) {
+      requestPolling(existing);
+      return;
+    }
+    setHangingUp(true);
+    leaveRoom();
     try {
       const res = await postJson<FinishResponse>('/api/interview/finish', {
         session_id: sessionId ?? '',
       });
-      navigate(`/report/${res.report_id}`);
+      localStorage.setItem(jobStorageKey, res.job_id);
+      requestPolling(res.job_id);
     } catch (e) {
-      if (e instanceof ApiError && e.status === 409) {
-        Message.warning(e.message);
-      } else {
-        Message.error(e instanceof Error ? e.message : '结束面试失败');
-      }
-      leaveRoom();
-      navigate('/');
-    } finally {
+      Message.error(e instanceof ApiError && e.status === 409
+        ? '面试会话状态已变更，请刷新后重试'
+        : '结束面试请求失败，请检查网络后重试');
       setHangingUp(false);
     }
   };

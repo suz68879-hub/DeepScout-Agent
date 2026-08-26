@@ -13,6 +13,7 @@ from api import analytics as analytics_api
 from api import auth as auth_api
 from api import debug as debug_api
 from api import interview as interview_api
+from api import jobs as jobs_api
 from api import recording as recording_api
 from api import reports as reports_api
 from api import resume as resume_api
@@ -119,6 +120,7 @@ def create_app() -> FastAPI:
     application.include_router(auth_api.router)
     application.include_router(resume_api.router)
     application.include_router(interview_api.router)
+    application.include_router(jobs_api.router)
     application.include_router(reports_api.router)
     application.include_router(analytics_api.router)
     application.include_router(recording_api.router)

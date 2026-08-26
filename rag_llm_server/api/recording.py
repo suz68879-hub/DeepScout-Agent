@@ -13,7 +13,7 @@ from services.storage import storage
 router = APIRouter(prefix="/api/recording", tags=["recording"])
 
 
-@router.post("/upload")
+@router.post("/upload", status_code=202)
 async def upload_recording_file(
     file: UploadFile = File(...),
     position: str = Form(DEFAULT_POSITION),
@@ -37,7 +37,11 @@ async def upload_recording_file(
             raise HTTPException(
                 status_code=503, detail="录音任务创建失败，请稍后重试"
             ) from None
-        return {"recording_id": row["id"], "status": row["status"]}
+        return {
+            "recording_id": row["id"],
+            "job_id": row["job_id"],
+            "status": row["status"],
+        }
 
     fingerprint = {
         "filename": filename,
