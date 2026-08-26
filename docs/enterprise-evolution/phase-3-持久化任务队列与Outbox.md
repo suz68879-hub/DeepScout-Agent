@@ -154,6 +154,7 @@
 
 ### P3-T11 执行队列韧性验收
 
+- **实施状态**：已完成；7 个隔离故障场景各重复 10 次，事务边界、confirm 窗口、worker kill、重复消息、RabbitMQ 短断恢复和明确 DLQ 均通过；业务效果计数始终为 1。后端 623 passed、15 skipped，覆盖率 82.96%（门槛 81%）。
 - **依赖/并行**：P3-T10；最后执行。**规模/角色**：M，测试/SRE。
 - **预计文件**：`rag_llm_server/tests/resilience/test_job_delivery.py`、`scripts/verify_job_resilience.ps1`、`docs/enterprise-evolution/evidence/phase-3-acceptance.md`。
 - **契约与步骤**：覆盖事务提交前后、publish confirm 前后、worker 执行中 kill、重复消息、RabbitMQ 短断和恢复；记录 job/outbox/DLQ 最终状态。
@@ -163,10 +164,10 @@
 
 ## 4. 阶段退出门槛
 
-- [ ] API/Worker/dispatcher 任一重启不静默丢任务。
-- [ ] 重复消息、重试和任务重放不产生重复报告或录音结果。
-- [ ] 所有任务 owner-scoped、可查询、可审计，最终成功或进入明确 DLQ。
-- [ ] 实时 Interviewer 路径延迟未因队列化回归。
+- [x] API/Worker/dispatcher 任一重启不静默丢任务。
+- [x] 重复消息、重试和任务重放不产生重复报告或录音结果。
+- [x] 所有任务 owner-scoped、可查询、可审计，最终成功或进入明确 DLQ。
+- [x] 实时 Interviewer 路径延迟未因队列化回归。
 
 ## 5. 风险与交接
 
