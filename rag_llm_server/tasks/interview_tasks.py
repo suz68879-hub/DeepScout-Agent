@@ -4,6 +4,7 @@ import uuid
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta, timezone
 
+import httpx
 from sqlalchemy import select
 
 from agents.graph import ColdPathOutputError, close_graph, init_graph
@@ -17,6 +18,13 @@ from services.jobs.repository import JobRepository
 from services.jobs.types import JobErrorCode, JobRecord, JobStatus
 from services.storage import close_storage, init_storage
 from tasks.celery_app import celery_app
+from tasks.retry_policy import (
+    DeadLetterPublisher,
+    FailureClassification,
+    classify_exception,
+    countdown_for_retry,
+    decide_retry,
+)
 
 logger = logging.getLogger(__name__)
 ColdRunner = Callable[[JobRecord], Awaitable[dict]]
@@ -28,6 +36,14 @@ class InterviewTaskMessageError(Exception):
 
 class PreviousInterviewJobPending(Exception):
     """同一会话更早的冷任务尚未完成。"""
+
+
+class InterviewTaskPending(Exception):
+    """A retryable cold-path failure with a persisted retry countdown."""
+
+    def __init__(self, job_id: str, countdown: int):
+        super().__init__(job_id)
+        self.countdown = countdown
 
 
 def _summary(job: JobRecord) -> dict:
@@ -91,22 +107,33 @@ async def _existing_report(session, job: JobRecord) -> InterviewReport | None:
     )
 
 
-async def _fail_job(
+async def _resolve_failure(
     runtime: DatabaseRuntime,
-    job_id: uuid.UUID,
-    error_code: JobErrorCode,
+    job: JobRecord,
+    failure: FailureClassification,
 ) -> dict:
+    decision = decide_retry(
+        failure,
+        attempt=job.attempt,
+        max_attempts=job.max_attempts,
+    )
     async with runtime.session_scope() as session:
-        failed = await JobRepository(session).fail(job_id, error_code)
+        resolved = await JobRepository(session).resolve_failure(
+            job.id,
+            decision.error_code,
+            retryable=decision.should_retry,
+        )
+    if resolved.status is JobStatus.PENDING:
+        raise InterviewTaskPending(str(job.id), decision.countdown)
     logger.warning(
         "Interview cold-path job failed",
         extra={
             "event": "interview_cold_job_failed",
-            "job_id": str(job_id),
-            "error_code": error_code.value,
+            "job_id": str(job.id),
+            "error_code": resolved.error_code.value,
         },
     )
-    return _summary(failed)
+    return _summary(resolved)
 
 
 async def execute_interview_job(
@@ -119,23 +146,37 @@ async def execute_interview_job(
 ) -> dict:
     """执行一条已持久化消息；所有状态迁移都在独立短事务中完成。"""
     locked_job_id = _validate_message(schema_version, job_id, job_type)
+    retry_countdown = None
     async with runtime.session_scope() as session:
         repository = JobRepository(session)
         job = await repository.get_internal(locked_job_id)
         if job is None or job.job_type != JobType.INTERVIEW_FINISH.value:
             raise InterviewTaskMessageError("INTERVIEW_JOB_NOT_FOUND")
-        if job.status is not JobStatus.PENDING:
+        if job.status is JobStatus.RUNNING:
+            recovered = await repository.recover_expired(job.id)
+            if recovered is None:
+                retry_countdown = 5
+            elif recovered.status is JobStatus.PENDING:
+                retry_countdown = countdown_for_retry(recovered.attempt)
+            if recovered is not None:
+                job = recovered
+        if retry_countdown is None and job.status is not JobStatus.PENDING:
             return _summary(job)
-        try:
-            uuid.UUID(job.payload_ref["session_id"])
-        except (KeyError, TypeError, ValueError, AttributeError):
-            raise InterviewTaskMessageError("INVALID_INTERVIEW_JOB_PAYLOAD") from None
-        if await repository.has_unfinished_predecessor(job):
-            raise PreviousInterviewJobPending(str(job.id))
-        claimed = await repository.claim(
-            job.id,
-            lease_duration=timedelta(minutes=5),
-        )
+        if retry_countdown is None:
+            try:
+                uuid.UUID(job.payload_ref["session_id"])
+            except (KeyError, TypeError, ValueError, AttributeError):
+                raise InterviewTaskMessageError(
+                    "INVALID_INTERVIEW_JOB_PAYLOAD"
+                ) from None
+            if await repository.has_unfinished_predecessor(job):
+                raise PreviousInterviewJobPending(str(job.id))
+            claimed = await repository.claim(
+                job.id,
+                lease_duration=timedelta(minutes=5),
+            )
+    if retry_countdown is not None:
+        raise InterviewTaskPending(str(job.id), retry_countdown)
 
     try:
         async with runtime.session_scope() as session:
@@ -164,9 +205,27 @@ async def execute_interview_job(
             await cold_runner(claimed), claimed.payload_ref["session_id"]
         )
     except ColdPathOutputError:
-        return await _fail_job(runtime, claimed.id, JobErrorCode.PROVIDER_ERROR)
+        return await _resolve_failure(
+            runtime,
+            claimed,
+            FailureClassification(JobErrorCode.PROVIDER_ERROR, False),
+        )
     except (ColdPathStateError, InterviewTaskMessageError):
-        return await _fail_job(runtime, claimed.id, JobErrorCode.INVALID_INPUT)
+        return await _resolve_failure(
+            runtime,
+            claimed,
+            FailureClassification(JobErrorCode.INVALID_INPUT, False),
+        )
+    except (httpx.RequestError, OSError) as exc:
+        failure = (
+            FailureClassification(JobErrorCode.NETWORK_ERROR, True)
+            if isinstance(exc, httpx.RequestError)
+            else classify_exception(exc)
+        )
+        try:
+            return await _resolve_failure(runtime, claimed, failure)
+        except InterviewTaskPending as pending:
+            raise pending from exc
     except Exception as exc:
         logger.error(
             "Interview cold-path job raised an internal error",
@@ -177,7 +236,11 @@ async def execute_interview_job(
                 "error_type": type(exc).__name__,
             },
         )
-        return await _fail_job(runtime, claimed.id, JobErrorCode.INTERNAL_ERROR)
+        return await _resolve_failure(
+            runtime,
+            claimed,
+            FailureClassification(JobErrorCode.INTERNAL_ERROR, False),
+        )
 
     async with runtime.session_scope() as session:
         succeeded = await JobRepository(session).succeed(
@@ -228,7 +291,7 @@ async def run_interview_job(
 )
 def finish_interview(self, schema_version: int, job_id: str, job_type: str) -> dict:
     try:
-        return asyncio.run(
+        result = asyncio.run(
             run_interview_job(
                 settings,
                 schema_version=schema_version,
@@ -238,3 +301,12 @@ def finish_interview(self, schema_version: int, job_id: str, job_type: str) -> d
         )
     except PreviousInterviewJobPending as exc:
         raise self.retry(exc=exc, countdown=5, max_retries=None)
+    except InterviewTaskPending as exc:
+        raise self.retry(exc=exc, countdown=exc.countdown, max_retries=None)
+    if result.get("status") == JobStatus.FAILED.value:
+        DeadLetterPublisher(celery_app).publish(
+            job_id=result["job_id"],
+            error_code=result["error_code"],
+            original_queue="deepscout.cold",
+        )
+    return result

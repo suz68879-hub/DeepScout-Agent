@@ -16,13 +16,11 @@ from services.asr_client import AsrError
 from services.jobs.handlers import JobType
 from services.jobs.repository import JobRepository
 from services.jobs.types import (
-    JobConflictError,
     JobErrorCode,
     JobRecord,
     JobStatus,
 )
 from services.recording_service import (
-    POLL_INTERVAL_SECONDS,
     RecordingModelOutputError,
     RecordingPollPending,
     RecordingStateError,
@@ -30,6 +28,13 @@ from services.recording_service import (
 )
 from services.storage import close_storage, init_storage
 from tasks.celery_app import celery_app
+from tasks.retry_policy import (
+    DeadLetterPublisher,
+    FailureClassification,
+    classify_exception,
+    countdown_for_retry,
+    decide_retry,
+)
 
 logger = logging.getLogger(__name__)
 RecordingProcessor = Callable[[JobRecord], Awaitable[dict]]
@@ -41,6 +46,10 @@ class RecordingTaskMessageError(Exception):
 
 class RecordingTaskPending(Exception):
     """ASR is pending and Celery should redeliver after a countdown."""
+
+    def __init__(self, job_id: str, countdown: int):
+        super().__init__(job_id)
+        self.countdown = countdown
 
 
 def _summary(job: JobRecord) -> dict:
@@ -100,40 +109,37 @@ async def _mark_failed_recording(session, job: JobRecord, error: str) -> None:
         recording.finished_at = datetime.now(timezone.utc)
 
 
-async def _requeue_or_timeout(
-    runtime: DatabaseRuntime, job: JobRecord
-) -> dict | None:
-    async with runtime.session_scope() as session:
-        repository = JobRepository(session)
-        try:
-            await repository.requeue(job.id)
-        except JobConflictError:
-            await _mark_failed_recording(session, job, "transcription timed out")
-            failed = await repository.fail(
-                job.id, JobErrorCode.MAX_ATTEMPTS_EXCEEDED
-            )
-            return _summary(failed)
-    return None
-
-
-async def _fail_job(
+async def _resolve_failure(
     runtime: DatabaseRuntime,
     job: JobRecord,
-    error_code: JobErrorCode,
+    failure: FailureClassification,
     recording_error: str,
 ) -> dict:
+    decision = decide_retry(
+        failure,
+        attempt=job.attempt,
+        max_attempts=job.max_attempts,
+    )
     async with runtime.session_scope() as session:
-        await _mark_failed_recording(session, job, recording_error)
-        failed = await JobRepository(session).fail(job.id, error_code)
+        repository = JobRepository(session)
+        resolved = await repository.resolve_failure(
+            job.id,
+            decision.error_code,
+            retryable=decision.should_retry,
+        )
+        if resolved.status is JobStatus.FAILED:
+            await _mark_failed_recording(session, job, recording_error)
+    if resolved.status is JobStatus.PENDING:
+        raise RecordingTaskPending(str(job.id), decision.countdown)
     logger.warning(
         "Recording job failed",
         extra={
             "event": "recording_job_failed",
             "job_id": str(job.id),
-            "error_code": error_code.value,
+            "error_code": resolved.error_code.value,
         },
     )
-    return _summary(failed)
+    return _summary(resolved)
 
 
 async def execute_recording_job(
@@ -145,54 +151,88 @@ async def execute_recording_job(
     processor: RecordingProcessor = process_recording_step,
 ) -> dict:
     locked_job_id = _validate_message(schema_version, job_id, job_type)
+    retry_countdown = None
     async with runtime.session_scope() as session:
         repository = JobRepository(session)
         job = await repository.get_internal(locked_job_id)
         if job is None or job.job_type != JobType.RECORDING_PROCESS.value:
             raise RecordingTaskMessageError("RECORDING_JOB_NOT_FOUND")
-        if job.status is not JobStatus.PENDING:
+        if job.status is JobStatus.RUNNING:
+            recovered = await repository.recover_expired(job.id)
+            if recovered is None:
+                retry_countdown = 5
+            elif recovered.status is JobStatus.PENDING:
+                retry_countdown = countdown_for_retry(recovered.attempt)
+            elif recovered.status is JobStatus.FAILED:
+                await _mark_failed_recording(
+                    session,
+                    job,
+                    "recording worker retry limit exceeded",
+                )
+            if recovered is not None:
+                job = recovered
+        if retry_countdown is None and job.status is not JobStatus.PENDING:
             return _summary(job)
-        claimed = await repository.claim(
-            job.id, lease_duration=timedelta(minutes=5)
-        )
+        if retry_countdown is None:
+            claimed = await repository.claim(
+                job.id, lease_duration=timedelta(minutes=5)
+            )
+    if retry_countdown is not None:
+        raise RecordingTaskPending(str(job.id), retry_countdown)
 
     try:
         recording_id = str(uuid.UUID(claimed.payload_ref["recording_id"]))
         result_ref = _validate_result(await processor(claimed), recording_id)
     except RecordingPollPending as exc:
-        terminal = await _requeue_or_timeout(runtime, claimed)
-        if terminal is not None:
-            return terminal
-        raise RecordingTaskPending(str(claimed.id)) from exc
+        try:
+            return await _resolve_failure(
+                runtime,
+                claimed,
+                FailureClassification(JobErrorCode.PROVIDER_ERROR, True),
+                "transcription timed out",
+            )
+        except RecordingTaskPending as pending:
+            raise pending from exc
     except (httpx.RequestError, OSError) as exc:
-        terminal = await _requeue_or_timeout(runtime, claimed)
-        if terminal is not None:
-            return terminal
-        raise RecordingTaskPending(str(claimed.id)) from exc
-    except AsrError as exc:
-        if exc.status_code.startswith("5") or "429" in exc.status_code:
-            terminal = await _requeue_or_timeout(runtime, claimed)
-            if terminal is not None:
-                return terminal
-            raise RecordingTaskPending(str(claimed.id)) from exc
-        return await _fail_job(
-            runtime,
-            claimed,
-            JobErrorCode.PROVIDER_ERROR,
-            "speech recognition failed",
+        failure = (
+            FailureClassification(JobErrorCode.NETWORK_ERROR, True)
+            if isinstance(exc, httpx.RequestError)
+            else classify_exception(exc)
         )
+        try:
+            return await _resolve_failure(
+                runtime, claimed, failure, "recording analysis failed"
+            )
+        except RecordingTaskPending as pending:
+            raise pending from exc
+    except AsrError as exc:
+        retryable = exc.status_code.startswith("5") or "429" in exc.status_code
+        error_code = (
+            JobErrorCode.RATE_LIMITED
+            if "429" in exc.status_code
+            else JobErrorCode.PROVIDER_ERROR
+        )
+        try:
+            return await _resolve_failure(
+                runtime,
+                claimed,
+                FailureClassification(error_code, retryable),
+                "speech recognition failed",
+            )
+        except RecordingTaskPending as pending:
+            raise pending from exc
     except RecordingModelOutputError:
-        return await _fail_job(
+        return await _resolve_failure(
             runtime,
             claimed,
-            JobErrorCode.PROVIDER_ERROR,
+            FailureClassification(JobErrorCode.PROVIDER_ERROR, False),
             "recording analysis failed",
         )
     except (RecordingStateError, KeyError, TypeError, ValueError):
-        return await _fail_job(
+        return await _resolve_failure(
             runtime,
             claimed,
-            JobErrorCode.INVALID_INPUT,
+            FailureClassification(JobErrorCode.INVALID_INPUT, False),
             "recording input is invalid",
         )
     except Exception as exc:
@@ -205,10 +245,10 @@ async def execute_recording_job(
                 "error_type": type(exc).__name__,
             },
         )
-        return await _fail_job(
+        return await _resolve_failure(
             runtime,
             claimed,
-            JobErrorCode.INTERNAL_ERROR,
+            FailureClassification(JobErrorCode.INTERNAL_ERROR, False),
             "recording analysis failed",
         )
 
@@ -253,7 +293,7 @@ async def run_recording_job(
 )
 def process_recording(self, schema_version: int, job_id: str, job_type: str) -> dict:
     try:
-        return asyncio.run(
+        result = asyncio.run(
             run_recording_job(
                 settings,
                 schema_version=schema_version,
@@ -262,4 +302,11 @@ def process_recording(self, schema_version: int, job_id: str, job_type: str) -> 
             )
         )
     except RecordingTaskPending as exc:
-        raise self.retry(exc=exc, countdown=POLL_INTERVAL_SECONDS, max_retries=None)
+        raise self.retry(exc=exc, countdown=exc.countdown, max_retries=None)
+    if result.get("status") == JobStatus.FAILED.value:
+        DeadLetterPublisher(celery_app).publish(
+            job_id=result["job_id"],
+            error_code=result["error_code"],
+            original_queue="deepscout.recording",
+        )
+    return result

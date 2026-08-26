@@ -172,6 +172,7 @@ def test_celery_app_uses_durable_json_queues_and_reliable_delivery(monkeypatch):
         "deepscout.cold",
         "deepscout.recording",
         "deepscout.outbox",
+        "deepscout.dlq",
     }
     assert all(queue.durable and queue.exchange.durable for queue in queues.values())
     assert app.conf.task_default_delivery_mode == 2

@@ -13,6 +13,7 @@ from db.models import AppUser, BackgroundJob, InterviewReport, InterviewSession
 from services.jobs.repository import JobRepository
 from services.jobs.types import JobErrorCode, JobStatus
 from tasks.interview_tasks import (
+    InterviewTaskPending,
     InterviewTaskMessageError,
     PreviousInterviewJobPending,
     execute_interview_job,
@@ -118,15 +119,17 @@ async def test_later_job_waits_while_prior_session_job_is_unfinished(
 async def test_worker_restart_resumes_requeued_job(interview_task_runtime):
     runtime, owner_id, session_id = interview_task_runtime
     job = await _create_job(runtime, owner_id, session_id, "restart")
-    old = datetime(2026, 8, 25, 8, 0, tzinfo=timezone.utc)
+    old = datetime.now(timezone.utc) - timedelta(seconds=10)
     async with runtime.session_scope() as session:
         repository = JobRepository(session)
         await repository.claim(job.id, lease_duration=timedelta(seconds=1), now=old)
-        await repository.requeue_expired(now=old + timedelta(seconds=2))
 
     async def runner(_job):
         return {"schema_version": 1, "session_id": str(session_id)}
 
+    with pytest.raises(InterviewTaskPending) as exc_info:
+        await _execute(runtime, job, runner)
+    assert exc_info.value.countdown == 5
     result = await _execute(runtime, job, runner)
 
     assert result["status"] == JobStatus.SUCCEEDED.value
@@ -188,6 +191,23 @@ async def test_non_retryable_model_output_marks_job_failed(interview_task_runtim
     async with runtime.session_scope() as session:
         persisted = await JobRepository(session).get_internal(job.id)
     assert persisted.error_code is JobErrorCode.PROVIDER_ERROR
+
+
+async def test_network_failure_requeues_with_locked_backoff(interview_task_runtime):
+    runtime, owner_id, session_id = interview_task_runtime
+    job = await _create_job(runtime, owner_id, session_id, "network-retry")
+
+    async def unavailable(_job):
+        raise OSError("network unavailable")
+
+    with pytest.raises(InterviewTaskPending) as exc_info:
+        await _execute(runtime, job, unavailable)
+
+    assert exc_info.value.countdown == 5
+    async with runtime.session_scope() as session:
+        persisted = await JobRepository(session).get_internal(job.id)
+    assert persisted.status is JobStatus.PENDING
+    assert persisted.attempt == 1
 
 
 @pytest.mark.parametrize(

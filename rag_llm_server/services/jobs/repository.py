@@ -152,7 +152,7 @@ class JobRepository:
             .where(
                 BackgroundJob.id == _as_uuid(job_id),
                 BackgroundJob.status == JobStatus.PENDING.value,
-                BackgroundJob.attempt < BackgroundJob.max_attempts,
+                BackgroundJob.attempt <= BackgroundJob.max_attempts,
             )
             .values(
                 status=JobStatus.RUNNING.value,
@@ -237,7 +237,7 @@ class JobRepository:
             .where(
                 BackgroundJob.id == _as_uuid(job_id),
                 BackgroundJob.status == JobStatus.RUNNING.value,
-                BackgroundJob.attempt + 1 < BackgroundJob.max_attempts,
+                BackgroundJob.attempt < BackgroundJob.max_attempts,
             )
             .values(
                 status=JobStatus.PENDING.value,
@@ -245,6 +245,54 @@ class JobRepository:
                 updated_at=requeued_at,
                 lease_expires_at=None,
                 error_code=None,
+            )
+            .returning(BackgroundJob)
+        )
+        if model is None:
+            raise JobConflictError("job state conflict")
+        return _record(model)
+
+    async def resolve_failure(
+        self,
+        job_id: uuid.UUID | str,
+        error_code: JobErrorCode | str,
+        *,
+        retryable: bool,
+        now: datetime | None = None,
+    ) -> JobRecord:
+        """Atomically requeue a retryable failure or persist one terminal state."""
+        public_code = JobErrorCode(error_code)
+        resolved_at = _now(now)
+        can_retry = and_(
+            retryable,
+            BackgroundJob.attempt < BackgroundJob.max_attempts,
+        )
+        model = await self._session.scalar(
+            update(BackgroundJob)
+            .where(
+                BackgroundJob.id == _as_uuid(job_id),
+                BackgroundJob.status == JobStatus.RUNNING.value,
+            )
+            .values(
+                status=case(
+                    (can_retry, JobStatus.PENDING.value),
+                    else_=JobStatus.FAILED.value,
+                ),
+                attempt=case(
+                    (can_retry, BackgroundJob.attempt + 1),
+                    else_=BackgroundJob.attempt,
+                ),
+                updated_at=resolved_at,
+                finished_at=case((can_retry, None), else_=resolved_at),
+                lease_expires_at=None,
+                error_code=case(
+                    (can_retry, None),
+                    (
+                        retryable,
+                        JobErrorCode.MAX_ATTEMPTS_EXCEEDED.value,
+                    ),
+                    else_=public_code.value,
+                ),
             )
             .returning(BackgroundJob)
         )
@@ -301,7 +349,7 @@ class JobRepository:
             .limit(limit)
             .with_for_update(skip_locked=True)
         )
-        can_retry = BackgroundJob.attempt + 1 < BackgroundJob.max_attempts
+        can_retry = BackgroundJob.attempt < BackgroundJob.max_attempts
         models = (
             await self._session.scalars(
                 update(BackgroundJob)
@@ -327,3 +375,41 @@ class JobRepository:
             )
         ).all()
         return [_record(model) for model in models]
+
+    async def recover_expired(
+        self,
+        job_id: uuid.UUID | str,
+        *,
+        now: datetime | None = None,
+    ) -> JobRecord | None:
+        """Recover one redelivered worker-lost job using its persisted lease."""
+        recovered_at = _now(now)
+        can_retry = BackgroundJob.attempt < BackgroundJob.max_attempts
+        model = await self._session.scalar(
+            update(BackgroundJob)
+            .where(
+                BackgroundJob.id == _as_uuid(job_id),
+                BackgroundJob.status == JobStatus.RUNNING.value,
+                BackgroundJob.lease_expires_at.is_not(None),
+                BackgroundJob.lease_expires_at <= recovered_at,
+            )
+            .values(
+                status=case(
+                    (can_retry, JobStatus.PENDING.value),
+                    else_=JobStatus.FAILED.value,
+                ),
+                attempt=case(
+                    (can_retry, BackgroundJob.attempt + 1),
+                    else_=BackgroundJob.attempt,
+                ),
+                updated_at=recovered_at,
+                finished_at=case((can_retry, None), else_=recovered_at),
+                lease_expires_at=None,
+                error_code=case(
+                    (can_retry, None),
+                    else_=JobErrorCode.MAX_ATTEMPTS_EXCEEDED.value,
+                ),
+            )
+            .returning(BackgroundJob)
+        )
+        return _record(model) if model is not None else None

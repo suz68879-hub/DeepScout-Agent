@@ -144,6 +144,44 @@ async def test_fail_accepts_only_public_error_code(job_runtime):
     assert failed.finished_at is not None
 
 
+async def test_retryable_failure_uses_persisted_budget_and_one_terminal_state(
+    job_runtime,
+):
+    runtime, owner_id, _ = job_runtime
+    job = await _create_job(
+        runtime,
+        owner_id,
+        idempotency_key="failure-budget-key",
+        max_attempts=1,
+    )
+
+    async with runtime.session_scope() as session:
+        repository = JobRepository(session)
+        await repository.claim(job.id, lease_duration=timedelta(minutes=1))
+        pending = await repository.resolve_failure(
+            job.id,
+            JobErrorCode.NETWORK_ERROR,
+            retryable=True,
+        )
+        await repository.claim(job.id, lease_duration=timedelta(minutes=1))
+        failed = await repository.resolve_failure(
+            job.id,
+            JobErrorCode.NETWORK_ERROR,
+            retryable=True,
+        )
+        with pytest.raises(JobConflictError):
+            await repository.resolve_failure(
+                job.id,
+                JobErrorCode.NETWORK_ERROR,
+                retryable=True,
+            )
+
+    assert pending.status is JobStatus.PENDING
+    assert pending.attempt == 1
+    assert failed.status is JobStatus.FAILED
+    assert failed.error_code is JobErrorCode.MAX_ATTEMPTS_EXCEEDED
+
+
 async def test_requeue_increments_attempt_and_cancel_is_owner_scoped(job_runtime):
     runtime, owner_id, other_owner_id = job_runtime
     job = await _create_job(runtime, owner_id, idempotency_key="retry-key")
@@ -187,6 +225,12 @@ async def test_concurrent_lease_scanners_requeue_once_and_fail_exhausted_job(job
             lease_duration=timedelta(hours=1),
             now=started_at,
         )
+        await repository.claim(
+            exhausted.id,
+            lease_duration=timedelta(seconds=1),
+            now=started_at,
+        )
+        await repository.requeue(exhausted.id, now=started_at)
         await repository.claim(
             exhausted.id,
             lease_duration=timedelta(seconds=1),

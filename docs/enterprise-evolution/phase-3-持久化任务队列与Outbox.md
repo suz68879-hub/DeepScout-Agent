@@ -134,6 +134,7 @@
 
 ### P3-T09 增加重试与死信队列
 
+- **实施状态**：已完成；PG 锁定 5 档退避与原子终态、参数/权限/安全/未知异常分类、worker-lost 租约恢复及无 PII 持久 DLQ 验收通过；本机 RabbitMQ 集成 1 passed，后端 598 passed/15 skipped、覆盖率 83.15%（门槛 81%），前端 97 passed、E2E 3 passed。
 - **依赖/并行**：检查点 C。**规模/角色**：M，后端/SRE。
 - **预计文件**：`rag_llm_server/tasks/retry_policy.py`、`rag_llm_server/tasks/celery_app.py`、`rag_llm_server/services/jobs/repository.py`、`rag_llm_server/tests/test_retry_policy.py`、`rag_llm_server/tests/integration/test_dead_letter.py`。
 - **契约与步骤**：按锁定退避表分类异常；超过 5 次写 failed 并路由 DLQ；DLQ 消息保留 job_id/error_code/original_queue，不含 PII。

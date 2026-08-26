@@ -111,8 +111,10 @@ async def test_asr_pending_requeues_without_worker_sleep(recording_task_runtime)
     async def pending(_job):
         raise RecordingPollPending(str(recording_id))
 
-    with pytest.raises(RecordingTaskPending):
+    with pytest.raises(RecordingTaskPending) as exc_info:
         await _execute(runtime, job, pending)
+
+    assert exc_info.value.countdown == 5
 
     async with runtime.session_scope() as session:
         persisted = await JobRepository(session).get_internal(job.id)
@@ -127,8 +129,10 @@ async def test_transient_tos_or_asr_network_failure_requeues(recording_task_runt
     async def unavailable(_job):
         raise OSError("provider host is temporarily unavailable")
 
-    with pytest.raises(RecordingTaskPending):
+    with pytest.raises(RecordingTaskPending) as exc_info:
         await _execute(runtime, job, unavailable)
+
+    assert exc_info.value.countdown == 5
 
     async with runtime.session_scope() as session:
         persisted = await JobRepository(session).get_internal(job.id)
@@ -145,6 +149,8 @@ async def test_asr_timeout_fails_at_persisted_attempt_limit(recording_task_runti
     async def pending(_job):
         raise RecordingPollPending(str(recording_id))
 
+    with pytest.raises(RecordingTaskPending):
+        await _execute(runtime, job, pending)
     result = await _execute(runtime, job, pending)
 
     assert result["status"] == JobStatus.FAILED.value
@@ -158,11 +164,10 @@ async def test_asr_timeout_fails_at_persisted_attempt_limit(recording_task_runti
 async def test_worker_restart_resumes_requeued_recording(recording_task_runtime):
     runtime, owner_id, recording_id, tos_key = recording_task_runtime
     job = await _create_job(runtime, owner_id, recording_id, tos_key, "restart")
-    old = datetime(2026, 8, 26, 8, 0, tzinfo=timezone.utc)
+    old = datetime.now(timezone.utc) - timedelta(seconds=10)
     async with runtime.session_scope() as session:
         repository = JobRepository(session)
         await repository.claim(job.id, lease_duration=timedelta(seconds=1), now=old)
-        await repository.requeue_expired(now=old + timedelta(seconds=2))
 
     async def processor(_job):
         return {
@@ -171,12 +176,47 @@ async def test_worker_restart_resumes_requeued_recording(recording_task_runtime)
             "report_id": str(recording_id),
         }
 
+    with pytest.raises(RecordingTaskPending) as exc_info:
+        await _execute(runtime, job, processor)
+    assert exc_info.value.countdown == 5
     result = await _execute(runtime, job, processor)
 
     assert result["status"] == JobStatus.SUCCEEDED.value
     async with runtime.session_scope() as session:
         persisted = await JobRepository(session).get_internal(job.id)
     assert persisted.attempt == 1
+
+
+async def test_worker_lost_at_retry_limit_fails_job_and_recording(
+    recording_task_runtime,
+):
+    runtime, owner_id, recording_id, tos_key = recording_task_runtime
+    job = await _create_job(
+        runtime,
+        owner_id,
+        recording_id,
+        tos_key,
+        "worker-lost-limit",
+        max_attempts=1,
+    )
+    old = datetime.now(timezone.utc) - timedelta(seconds=10)
+    async with runtime.session_scope() as session:
+        repository = JobRepository(session)
+        await repository.claim(job.id, lease_duration=timedelta(seconds=1), now=old)
+        await repository.recover_expired(job.id)
+        await repository.claim(job.id, lease_duration=timedelta(seconds=1), now=old)
+
+    async def must_not_run(_job):
+        raise AssertionError("exhausted worker-lost job must not run")
+
+    result = await _execute(runtime, job, must_not_run)
+
+    assert result["status"] == JobStatus.FAILED.value
+    assert result["error_code"] == JobErrorCode.MAX_ATTEMPTS_EXCEEDED.value
+    async with runtime.session_scope() as session:
+        recording = await session.get(Recording, recording_id)
+    assert recording.status == "failed"
+    assert recording.error == "recording worker retry limit exceeded"
 
 
 async def test_model_output_failure_uses_public_error(recording_task_runtime):
@@ -190,6 +230,19 @@ async def test_model_output_failure_uses_public_error(recording_task_runtime):
 
     assert result["status"] == JobStatus.FAILED.value
     assert result["error_code"] == JobErrorCode.PROVIDER_ERROR.value
+
+
+async def test_permission_failure_is_terminal(recording_task_runtime):
+    runtime, owner_id, recording_id, tos_key = recording_task_runtime
+    job = await _create_job(runtime, owner_id, recording_id, tos_key, "permission")
+
+    async def denied(_job):
+        raise PermissionError("private path")
+
+    result = await _execute(runtime, job, denied)
+
+    assert result["status"] == JobStatus.FAILED.value
+    assert result["error_code"] == JobErrorCode.PERMISSION_DENIED.value
 
 
 @pytest.mark.parametrize(
@@ -210,6 +263,45 @@ def test_recording_celery_task_is_registered():
     from tasks.celery_app import celery_app
 
     assert "tasks.recording_tasks.process_recording" in celery_app.tasks
+
+
+def test_terminal_recording_job_publishes_privacy_safe_dead_letter(monkeypatch):
+    import tasks.recording_tasks as recording_tasks
+
+    job_id = uuid.uuid4()
+    published = []
+
+    async def failed_job(*_args, **_kwargs):
+        return {
+            "job_id": str(job_id),
+            "status": JobStatus.FAILED.value,
+            "error_code": JobErrorCode.MAX_ATTEMPTS_EXCEEDED.value,
+        }
+
+    class FakePublisher:
+        def __init__(self, _app):
+            pass
+
+        def publish(self, **message):
+            published.append(message)
+
+    monkeypatch.setattr(recording_tasks, "run_recording_job", failed_job)
+    monkeypatch.setattr(recording_tasks, "DeadLetterPublisher", FakePublisher)
+
+    result = recording_tasks.process_recording.run(
+        1,
+        str(job_id),
+        "recording.process",
+    )
+
+    assert result["status"] == JobStatus.FAILED.value
+    assert published == [
+        {
+            "job_id": str(job_id),
+            "error_code": JobErrorCode.MAX_ATTEMPTS_EXCEEDED.value,
+            "original_queue": "deepscout.recording",
+        }
+    ]
 
 
 async def test_recording_worker_lifecycle_always_closes_resources(monkeypatch):

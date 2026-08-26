@@ -6,6 +6,7 @@ from celery import Celery
 from kombu import Exchange, Queue
 
 from config import Config, settings
+from tasks.retry_policy import DEAD_LETTER_EXCHANGE, DEAD_LETTER_QUEUE
 
 EXCHANGE_NAME = "deepscout.jobs"
 COLD_QUEUE = "deepscout.cold"
@@ -44,6 +45,9 @@ def create_celery_app(config: Config) -> Celery:
     """根据已校验配置创建不使用 result backend 的 Celery 应用。"""
     app = Celery("deepscout", broker=config.CELERY_BROKER_URL)
     exchange = Exchange(EXCHANGE_NAME, type="direct", durable=True)
+    dead_letter_exchange = Exchange(
+        DEAD_LETTER_EXCHANGE, type="direct", durable=True
+    )
     app.conf.update(
         broker_url=config.CELERY_BROKER_URL,
         broker_use_ssl=_broker_ssl_options(config),
@@ -74,6 +78,12 @@ def create_celery_app(config: Config) -> Celery:
                 OUTBOX_QUEUE,
                 exchange=exchange,
                 routing_key="outbox",
+                durable=True,
+            ),
+            Queue(
+                DEAD_LETTER_QUEUE,
+                exchange=dead_letter_exchange,
+                routing_key="failed",
                 durable=True,
             ),
         ),
