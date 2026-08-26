@@ -255,6 +255,7 @@ async def test_upload_recording_tos_failure_no_row(monkeypatch):
 async def test_process_recording_done_path(monkeypatch):
     database = FakeDb({RECORDING_ID: processing_row()})
     monkeypatch.setattr(service, "storage", database)
+    monkeypatch.setattr(service, "get_tos_store", lambda: FakeTosStore())
 
     async def query(task_id):
         return {"result": {"text": "all", "utterances": [{
