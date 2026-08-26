@@ -67,7 +67,7 @@ def _idempotency_key(value: str) -> str:
     return value
 
 
-def _payload(job_type: JobType, value: dict) -> dict:
+def validate_job_payload(job_type: JobType, value: dict) -> dict:
     if not isinstance(value, dict):
         raise JobDispatchError(DispatchErrorCode.INVALID_PAYLOAD)
     rules = _PAYLOAD_RULES[job_type]
@@ -107,7 +107,7 @@ class JobDispatcher:
     ) -> JobRecord:
         locked_type = _job_type(job_type)
         locked_owner = _owner_id(owner_id)
-        locked_payload = _payload(locked_type, payload_ref)
+        locked_payload = validate_job_payload(locked_type, payload_ref)
         locked_key = _idempotency_key(idempotency_key)
         try:
             job = await self._jobs.create(

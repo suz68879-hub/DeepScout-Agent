@@ -45,6 +45,11 @@ class JobRecord:
     finished_at: datetime | None
     lease_expires_at: datetime | None
     error_code: JobErrorCode | None
+    replay_of: uuid.UUID | None = None
+    replay_operator: str | None = None
+    replay_approved_by: str | None = None
+    replay_reason: str | None = None
+    replayed_at: datetime | None = None
 
 
 _ALLOWED_TRANSITIONS = {

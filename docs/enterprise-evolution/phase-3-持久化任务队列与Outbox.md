@@ -144,6 +144,7 @@
 
 ### P3-T10 增加受审计任务重放
 
+- **实施状态**：已完成；仅受控 CLI 可创建关联 `replay_of` 的新任务，原 failed 终态保持不变；双人审批、owner/payload/业务结果保护、并发去重、审计链及 dry-run 验收通过。migration `20260826_0007` 完成 `upgrade → downgrade → upgrade` 且 Alembic 无漂移；后端 616 passed、15 skipped，覆盖率 82.89%（门槛 81%），前端 97 passed、E2E 3 passed。
 - **依赖/并行**：P3-T09。**规模/角色**：M，后端/安全。
 - **预计文件**：`rag_llm_server/scripts/replay_job.py`、`rag_llm_server/services/jobs/replay.py`、新增审计字段 revision、`rag_llm_server/tests/test_job_replay.py`、`deploy/runbooks/job-replay.md`。
 - **契约与步骤**：仅 CLI/受控作业执行；要求 operator、reason、原 job_id；创建新 job 并关联 replay_of，不复活原终态；记录时间和结果。

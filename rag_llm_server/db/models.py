@@ -271,6 +271,11 @@ class BackgroundJob(Base):
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     error_code: Mapped[str | None] = mapped_column(String(64))
+    replay_of: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    replay_operator: Mapped[str | None] = mapped_column(String(128))
+    replay_approved_by: Mapped[str | None] = mapped_column(String(128))
+    replay_reason: Mapped[str | None] = mapped_column(String(512))
+    replayed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     __table_args__ = (
         CheckConstraint(
@@ -302,6 +307,31 @@ class BackgroundJob(Base):
             "error_code IS NULL OR error_code ~ '^[A-Z][A-Z0-9_]{0,63}$'",
             name="error_code_format",
         ),
+        CheckConstraint(
+            "(replay_of IS NULL AND replay_operator IS NULL "
+            "AND replay_approved_by IS NULL AND replay_reason IS NULL "
+            "AND replayed_at IS NULL) OR "
+            "(replay_of IS NOT NULL AND replay_of <> id "
+            "AND char_length(replay_operator) BETWEEN 3 AND 128 "
+            "AND replay_operator = btrim(replay_operator) "
+            "AND replay_operator !~ '[[:cntrl:][:space:]]' "
+            "AND (replay_approved_by IS NULL OR ("
+            "char_length(replay_approved_by) BETWEEN 3 AND 128 "
+            "AND replay_approved_by = btrim(replay_approved_by) "
+            "AND replay_approved_by !~ '[[:cntrl:][:space:]]')) "
+            "AND char_length(replay_reason) BETWEEN 10 AND 512 "
+            "AND replay_reason = btrim(replay_reason) "
+            "AND replay_reason !~ '[[:cntrl:]]' "
+            "AND replayed_at IS NOT NULL)",
+            name="replay_audit_complete",
+        ),
+        ForeignKeyConstraint(
+            ["replay_of"],
+            ["background_job.id"],
+            name="fk_background_job_replay_of",
+            ondelete="CASCADE",
+        ),
+        UniqueConstraint("replay_of", name="uq_background_job_replay_of"),
         Index(
             "uq_background_job_owner_type_idempotency",
             owner_id,

@@ -37,6 +37,11 @@ def _record(model: BackgroundJob) -> JobRecord:
         finished_at=model.finished_at,
         lease_expires_at=model.lease_expires_at,
         error_code=JobErrorCode(model.error_code) if model.error_code else None,
+        replay_of=model.replay_of,
+        replay_operator=model.replay_operator,
+        replay_approved_by=model.replay_approved_by,
+        replay_reason=model.replay_reason,
+        replayed_at=model.replayed_at,
     )
 
 
