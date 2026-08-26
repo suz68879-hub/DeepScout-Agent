@@ -217,6 +217,7 @@ class Recording(Base):
     )
     filename: Mapped[str | None] = mapped_column(Text)
     ext: Mapped[str | None] = mapped_column(String(32))
+    position: Mapped[str | None] = mapped_column(Text)
     tos_key: Mapped[str | None] = mapped_column(Text)
     size_bytes: Mapped[int | None] = mapped_column(BigInteger)
     status: Mapped[str | None] = mapped_column(String(32))

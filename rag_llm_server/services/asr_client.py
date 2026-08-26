@@ -40,11 +40,11 @@ def _headers(task_id: str) -> dict:
     }
 
 
-async def submit_asr(audio_url: str, ext: str) -> str:
+async def submit_asr(audio_url: str, ext: str, *, task_id: str | None = None) -> str:
     """提交识别任务，返回 task_id（客户端生成的 UUID，query 复用）。"""
     if not settings.ASR_FILE_API_KEY:
         raise ValueError("未配置 ASR_FILE_API_KEY，无法提交语音识别任务")
-    task_id = str(uuid.uuid4())
+    task_id = task_id or str(uuid.uuid4())
     body = {
         "user": {"uid": task_id},
         "audio": {"format": FORMAT_BY_EXT[ext], "url": audio_url, "language": "zh-CN"},

@@ -128,12 +128,13 @@ def generate_fixture(output: Path | str, users: int = 25) -> dict[str, int]:
                     ),
                 )
                 connection.execute(
-                    "INSERT INTO recording VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "INSERT INTO recording VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         recording_id,
                         user_id,
                         f"synthetic-{ordinal}.wav",
                         "wav",
+                        "synthetic engineer",
                         f"recordings/synthetic-{ordinal}.wav",
                         16,
                         "finished",

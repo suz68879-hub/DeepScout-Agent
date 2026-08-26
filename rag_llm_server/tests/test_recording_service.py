@@ -1,13 +1,96 @@
 """Recording pipeline orchestration tests with external services stubbed."""
+import inspect
+import os
+import uuid
+
 import pytest
+from dotenv import load_dotenv
+from sqlalchemy import delete, func, select
 
 from agents.recording_analyzer import SpeakerAssignment
 from agents.reporter import Report
+from config import Config
+from db.engine import build_database_runtime
+from db.models import AppUser, BackgroundJob, OutboxEvent, Recording
 from services import recording_service as service
-from services.asr_client import AsrError
+USER_ID = "11111111-1111-1111-1111-111111111111"
+RECORDING_ID = "22222222-2222-2222-2222-222222222222"
 
 
-USER_ID = "u1"
+@pytest.fixture
+async def recording_job_runtime(monkeypatch):
+    load_dotenv()
+    if not os.getenv("DATABASE_URL"):
+        pytest.skip("DATABASE_URL is required for recording job tests")
+    monkeypatch.setenv("APP_ENV", "test")
+    monkeypatch.setenv("STORAGE_BACKEND", "postgres")
+    runtime = build_database_runtime(Config())
+    await runtime.start()
+    owner_id = uuid.uuid4()
+    async with runtime.session_scope() as session:
+        session.add(
+            AppUser(
+                id=owner_id,
+                username=f"recording_job_{owner_id.hex}",
+                password_hash="test-only",
+            )
+        )
+    try:
+        yield runtime, owner_id
+    finally:
+        async with runtime.session_scope() as session:
+            await session.execute(delete(AppUser).where(AppUser.id == owner_id))
+        await runtime.close()
+
+
+async def test_create_recording_job_writes_recording_and_outbox_atomically(
+    recording_job_runtime,
+):
+    runtime, owner_id = recording_job_runtime
+    recording_id = uuid.uuid4()
+    tos_key = f"users/{owner_id}/recordings/{recording_id}.wav"
+
+    async with runtime.session_scope() as session:
+        row, job = await service.create_recording_job(
+            session,
+            owner_id=owner_id,
+            recording={
+                "id": str(recording_id),
+                "filename": "interview.wav",
+                "ext": "wav",
+                "tos_key": tos_key,
+                "size_bytes": 4,
+                "position": "Java 后端",
+                "status": "processing",
+            },
+        )
+
+    assert row["position"] == "Java 后端"
+    assert job.payload_ref == {
+        "schema_version": 1,
+        "recording_id": str(recording_id),
+        "tos_key": tos_key,
+    }
+    async with runtime.session_scope() as session:
+        assert await session.scalar(
+            select(func.count())
+            .select_from(BackgroundJob)
+            .where(BackgroundJob.id == job.id)
+        ) == 1
+        assert await session.scalar(
+            select(func.count())
+            .select_from(OutboxEvent)
+            .where(OutboxEvent.aggregate_id == job.id)
+        ) == 1
+        persisted = await session.get(Recording, recording_id)
+    assert persisted.position == "Java 后端"
+
+
+def test_recording_service_has_no_process_local_task_registry():
+    assert not hasattr(service, "_running_tasks")
+    assert not hasattr(service, "resume_pending")
+    assert not hasattr(service, "schedule_recording")
+    assert "create_task" not in inspect.getsource(service)
 
 
 class FakeTosStore:
@@ -28,6 +111,7 @@ class FakeTosStore:
 class FakeDb:
     def __init__(self, rows=None):
         self.rows = rows or {}
+        self.reports = {}
         self.created = []
         self.updates = []
 
@@ -53,8 +137,12 @@ class FakeDb:
     async def recording_list_processing(self):
         return [row for row in self.rows.values() if row.get("status") == "processing"]
 
+    async def report_get(self, user_id, report_id):
+        row = self.reports.get(report_id)
+        return row if row and row["user_id"] == user_id else None
 
-def processing_row(recording_id="rec1", task_id="t-1"):
+
+def processing_row(recording_id=RECORDING_ID, task_id="t-1"):
     return {
         "id": recording_id,
         "user_id": USER_ID,
@@ -62,8 +150,88 @@ def processing_row(recording_id="rec1", task_id="t-1"):
         "asr_task_id": task_id,
         "filename": "a.mp3",
         "ext": "mp3",
+        "position": "Java backend",
         "tos_key": f"users/{USER_ID}/recordings/{recording_id}.mp3",
     }
+
+
+def recording_job(recording_id=RECORDING_ID):
+    return type("Job", (), {
+        "id": uuid.uuid4(),
+        "owner_id": USER_ID,
+        "job_type": "recording.process",
+        "payload_ref": {
+            "schema_version": 1,
+            "recording_id": recording_id,
+            "tos_key": f"users/{USER_ID}/recordings/{recording_id}.mp3",
+        },
+    })()
+
+
+async def test_upload_persists_job_without_calling_asr_in_api_process(monkeypatch):
+    store = FakeTosStore()
+    captured = {}
+
+    async def enqueue(owner_id, recording):
+        captured.update({"owner_id": owner_id, "recording": recording})
+        return {**recording, "user_id": owner_id}, type(
+            "Job", (), {"id": uuid.uuid4()}
+        )()
+
+    monkeypatch.setattr(service, "get_tos_store", lambda: store)
+    monkeypatch.setattr(service, "enqueue_uploaded_recording", enqueue, raising=False)
+
+    result = await service.upload_recording(
+        USER_ID, "a.mp3", "mp3", b"audio", "Java backend"
+    )
+
+    assert result["job_id"]
+    assert captured["recording"]["position"] == "Java backend"
+    assert captured["recording"]["asr_task_id"] is None
+    assert store.saved[captured["recording"]["tos_key"]] == b"audio"
+
+
+async def test_process_recording_pending_queries_once_without_sleep(monkeypatch):
+    database = FakeDb({RECORDING_ID: processing_row(task_id=None)})
+    store = FakeTosStore()
+    submitted = []
+    queried = []
+
+    async def submit(url, ext, *, task_id=None):
+        submitted.append((url, ext, task_id))
+        return task_id
+
+    async def query(task_id):
+        queried.append(task_id)
+        return None
+
+    monkeypatch.setattr(service, "storage", database)
+    monkeypatch.setattr(service, "get_tos_store", lambda: store)
+    monkeypatch.setattr(service, "submit_asr", submit)
+    monkeypatch.setattr(service, "query_asr", query)
+
+    with pytest.raises(service.RecordingPollPending):
+        await service.process_recording(recording_job())
+
+    assert len(submitted) == 1
+    assert submitted[0][2] == database.rows[RECORDING_ID]["asr_task_id"]
+    assert queried == [database.rows[RECORDING_ID]["asr_task_id"]]
+
+
+async def test_existing_report_repairs_recording_without_duplicate_analysis(monkeypatch):
+    database = FakeDb({RECORDING_ID: processing_row()})
+    database.reports[RECORDING_ID] = {
+        "id": RECORDING_ID,
+        "user_id": USER_ID,
+        "source": "recording",
+    }
+    monkeypatch.setattr(service, "storage", database)
+
+    result = await service.process_recording(recording_job())
+
+    assert result["report_id"] == RECORDING_ID
+    assert database.updates[-1][2]["status"] == "done"
+    assert database.updates[-1][2]["report_id"] == RECORDING_ID
 
 
 async def test_upload_recording_requires_tos(monkeypatch):
@@ -84,56 +252,11 @@ async def test_upload_recording_tos_failure_no_row(monkeypatch):
     assert database.created == []
 
 
-async def test_upload_recording_submit_failure_marks_failed(monkeypatch):
-    database = FakeDb()
-    monkeypatch.setattr(service, "storage", database)
-    monkeypatch.setattr(service, "get_tos_store", lambda: FakeTosStore())
-
-    async def fail_submit(url, ext):
-        raise AsrError("45000001", "invalid request")
-
-    monkeypatch.setattr(service, "submit_asr", fail_submit)
-    with pytest.raises(AsrError):
-        await service.upload_recording(USER_ID, "a.mp3", "mp3", b"x", "Java backend")
-    assert database.updates[-1][2]["status"] == "failed"
-    assert database.updates[-1][2]["error"] == "speech recognition task submission failed"
-
-
-async def test_upload_recording_schedules_worker(monkeypatch):
-    database = FakeDb()
-    monkeypatch.setattr(service, "storage", database)
-    monkeypatch.setattr(service, "get_tos_store", lambda: FakeTosStore())
-
-    async def submit(url, ext):
-        return "t-1"
-
-    scheduled = []
-    monkeypatch.setattr(service, "submit_asr", submit)
-    monkeypatch.setattr(service, "schedule_recording", lambda recording_id, position: scheduled.append(recording_id))
-    row = await service.upload_recording(USER_ID, "a.mp3", "mp3", b"x", "Java backend")
-    assert row["asr_task_id"] == "t-1"
-    assert scheduled == [row["id"]]
-    assert row["tos_key"].startswith(f"users/{USER_ID}/recordings/")
-
-
-async def test_schedule_recording_is_idempotent(monkeypatch):
-    scheduled = []
-    monkeypatch.setattr(service, "create_task", lambda coroutine: scheduled.append(coroutine) or coroutine.close())
-    monkeypatch.setattr(service, "_running_tasks", set())
-    service.schedule_recording("rec1")
-    service.schedule_recording("rec1")
-    assert len(scheduled) == 1
-
-
 async def test_process_recording_done_path(monkeypatch):
-    database = FakeDb({"rec1": processing_row()})
+    database = FakeDb({RECORDING_ID: processing_row()})
     monkeypatch.setattr(service, "storage", database)
-    calls = {"count": 0}
 
     async def query(task_id):
-        calls["count"] += 1
-        if calls["count"] < 2:
-            return None
         return {"result": {"text": "all", "utterances": [{
             "text": "answer", "start_time": 0, "end_time": 100, "additions": {"speaker": "1"},
         }]}}
@@ -147,66 +270,13 @@ async def test_process_recording_done_path(monkeypatch):
         )
 
     async def save(*args):
-        return "rep-1"
-
-    async def no_sleep(seconds):
-        return None
+        return RECORDING_ID
 
     monkeypatch.setattr(service, "query_asr", query)
     monkeypatch.setattr(service, "judge_roles", judge)
     monkeypatch.setattr(service, "generate_recording_report", generate)
     monkeypatch.setattr(service, "save_recording_report", save)
-    monkeypatch.setattr(service, "sleep", no_sleep)
-    await service._process_recording("rec1", "Java backend")
+    result = await service.process_recording(recording_job())
     assert database.updates[-1][2]["status"] == "done"
-    assert database.updates[-1][2]["report_id"] == "rep-1"
-
-
-async def test_process_recording_timeout_marks_failed(monkeypatch):
-    database = FakeDb({"rec1": processing_row()})
-    monkeypatch.setattr(service, "storage", database)
-    monkeypatch.setattr(service, "POLL_TIMEOUT_SECONDS", -1)
-
-    async def no_sleep(seconds):
-        return None
-
-    monkeypatch.setattr(service, "sleep", no_sleep)
-    await service._process_recording("rec1", "Java backend")
-    assert database.updates[-1][2]["error"] == "transcription timed out"
-
-
-async def test_process_recording_analysis_failure_hides_details(monkeypatch):
-    database = FakeDb({"rec1": processing_row()})
-    monkeypatch.setattr(service, "storage", database)
-
-    async def no_sleep(seconds):
-        return None
-
-    async def query(task_id):
-        return {"result": {"text": "all", "utterances": [{
-            "text": "answer", "start_time": 0, "end_time": 100, "additions": {"speaker": "1"},
-        }]}}
-
-    async def fail_judge(transcript):
-        raise RuntimeError("sensitive model response")
-
-    monkeypatch.setattr(service, "sleep", no_sleep)
-    monkeypatch.setattr(service, "query_asr", query)
-    monkeypatch.setattr(service, "judge_roles", fail_judge)
-    await service._process_recording("rec1", "Java backend")
-    assert database.updates[-1][2]["error"] == "recording analysis failed"
-    assert "answer" in database.updates[-1][2]["transcript_json"]
-
-
-async def test_resume_pending_keeps_original_owner(monkeypatch):
-    database = FakeDb({
-        "r1": processing_row("r1", "t-1"),
-        "r2": processing_row("r2", None),
-    })
-    monkeypatch.setattr(service, "storage", database)
-    scheduled = []
-    monkeypatch.setattr(service, "schedule_recording", lambda recording_id: scheduled.append(recording_id))
-    resumed = await service.resume_pending()
-    assert resumed == ["r1"]
-    assert scheduled == ["r1"]
-    assert database.updates[-1][:2] == (USER_ID, "r2")
+    assert database.updates[-1][2]["report_id"] == RECORDING_ID
+    assert result["report_id"] == RECORDING_ID

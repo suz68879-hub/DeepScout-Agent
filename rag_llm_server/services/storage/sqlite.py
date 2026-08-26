@@ -78,6 +78,7 @@ CREATE TABLE IF NOT EXISTS recording (
   user_id TEXT NOT NULL REFERENCES app_user(id),
   filename TEXT,
   ext TEXT,
+  position TEXT,
   tos_key TEXT,
   size_bytes INTEGER,
   status TEXT,
@@ -97,7 +98,7 @@ class SqliteStorage(BaseStorage):
     RESUME_COLS = {"content", "structured_json", "source", "status"}
     SESSION_COLS = {"resume_id", "position", "stage", "status", "ended_at", "rtc_status"}
     RECORDING_COLS = {
-        "filename", "ext", "tos_key", "size_bytes", "status", "asr_task_id",
+        "filename", "ext", "position", "tos_key", "size_bytes", "status", "asr_task_id",
         "transcript_json", "error", "report_id", "finished_at",
     }
 
@@ -144,6 +145,7 @@ class SqliteStorage(BaseStorage):
             await self._add_column(
                 "interview_session", "rtc_fencing_token", "INTEGER NOT NULL DEFAULT 0",
             )
+            await self._add_column("recording", "position", "TEXT")
 
             session_rows = await (
                 await conn.execute(
@@ -545,7 +547,7 @@ class SqliteStorage(BaseStorage):
             raise ValueError("report does not belong to user")
         row.setdefault("id", str(uuid.uuid4()))
         for key in (
-            "filename", "ext", "tos_key", "size_bytes", "asr_task_id", "transcript_json",
+            "filename", "ext", "position", "tos_key", "size_bytes", "asr_task_id", "transcript_json",
             "error", "report_id",
         ):
             row.setdefault(key, None)
@@ -554,9 +556,9 @@ class SqliteStorage(BaseStorage):
         row.setdefault("finished_at", None)
         row["user_id"] = user_id
         await self._c().execute(
-            "INSERT INTO recording (id, user_id, filename, ext, tos_key, size_bytes, status, "
+            "INSERT INTO recording (id, user_id, filename, ext, position, tos_key, size_bytes, status, "
             "asr_task_id, transcript_json, error, report_id, created_at, finished_at) VALUES "
-            "(:id, :user_id, :filename, :ext, :tos_key, :size_bytes, :status, :asr_task_id, "
+            "(:id, :user_id, :filename, :ext, :position, :tos_key, :size_bytes, :status, :asr_task_id, "
             ":transcript_json, :error, :report_id, :created_at, :finished_at)", row,
         )
         await self._c().commit()

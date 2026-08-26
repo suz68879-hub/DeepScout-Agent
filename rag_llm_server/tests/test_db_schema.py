@@ -27,6 +27,7 @@ def test_metadata_contains_business_tables_and_postgres_types():
     assert isinstance(Base.metadata.tables["resume"].c.structured_json.type, JSONB)
     assert isinstance(Base.metadata.tables["interview_report"].c.scores_json.type, JSONB)
     assert isinstance(Base.metadata.tables["recording"].c.transcript_json.type, JSONB)
+    assert "position" in Base.metadata.tables["recording"].c
 
     for table in Base.metadata.tables.values():
         for column in table.c:

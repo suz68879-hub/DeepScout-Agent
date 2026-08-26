@@ -5,6 +5,7 @@ import uuid
 import pytest
 from dotenv import load_dotenv
 from sqlalchemy import delete, update
+from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from db.models import AppUser, Message, Resume
@@ -16,9 +17,10 @@ from tests.test_data_migration import _build_source
 @pytest.fixture
 async def verifier_target():
     load_dotenv()
-    target = os.getenv("MIGRATION_DATABASE_URL")
-    if not target:
+    target_value = os.getenv("MIGRATION_DATABASE_URL")
+    if not target_value:
         pytest.skip("MIGRATION_DATABASE_URL is required for verifier tests")
+    target = make_url(target_value)
     engine = create_async_engine(target)
     sessions = async_sessionmaker(engine, expire_on_commit=False)
     prefix = f"verifier_{uuid.uuid4().hex[:10]}"

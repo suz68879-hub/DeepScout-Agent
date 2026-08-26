@@ -108,6 +108,7 @@
 
 ### P3-T07 迁移录音处理任务
 
+- **实施状态**：已完成；上传事务原子写入 Recording/Job/Outbox，录音分析改由独立 Celery worker 单步轮询，ASR 幂等锚点、持久 attempt/lease 恢复及报告唯一性验证通过；migration `20260826_0006` 可逆，后端 560 passed、17 skipped，覆盖率 82.93%（门槛 81%）。
 - **依赖/并行**：检查点 B；可与 P3-T06 并行。**规模/角色**：M，后端/Agent。
 - **预计文件**：`rag_llm_server/services/recording_service.py`、`rag_llm_server/tasks/recording_tasks.py`、`rag_llm_server/tests/test_recording_service.py`、`rag_llm_server/tests/test_recording_tasks.py`、`rag_llm_server/tests/test_recording_report_service.py`。
 - **契约与步骤**：上传完成后创建 Job+Outbox；worker 只传 recording_id/TOS key，继续使用 asr_task_id 幂等锚点；删除 `_running_tasks`、`resume_pending` 和 create_task。

@@ -33,10 +33,10 @@ async def upload_recording_file(
     async def operation():
         try:
             row = await upload_recording(user["id"], filename, ext, raw, position)
-        except (RuntimeError, OSError) as e:
-            raise HTTPException(status_code=503, detail=f"录音上传失败：{e}")
-        except Exception as e:
-            raise HTTPException(status_code=502, detail=f"语音识别任务提交失败：{e}")
+        except Exception:
+            raise HTTPException(
+                status_code=503, detail="录音任务创建失败，请稍后重试"
+            ) from None
         return {"recording_id": row["id"], "status": row["status"]}
 
     fingerprint = {

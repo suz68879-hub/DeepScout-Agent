@@ -6,9 +6,6 @@ import pytest
 from fastapi import HTTPException, UploadFile
 
 from api import recording as rec_api
-from services.asr_client import AsrError
-
-
 TEST_USER = {"id": "u1", "username": "alice"}
 
 
@@ -110,17 +107,19 @@ async def test_upload_tos_unavailable_returns_503(monkeypatch):
     with pytest.raises(HTTPException) as ei:
         await rec_api.upload_recording_file(_upload("a.mp3", b"x"), user=TEST_USER)
     assert ei.value.status_code == 503
-    assert "TOS" in ei.value.detail
+    assert "TOS" not in ei.value.detail
 
 
-async def test_upload_submit_failure_returns_502(monkeypatch):
+async def test_upload_job_creation_failure_hides_internal_details(monkeypatch):
     async def fake_upload(user_id, filename, ext, raw, position):
-        raise AsrError("45000151", "音频格式不正确")
+        raise RuntimeError("postgresql://user:secret@internal/database")
 
     monkeypatch.setattr(rec_api, "upload_recording", fake_upload)
     with pytest.raises(HTTPException) as ei:
         await rec_api.upload_recording_file(_upload("a.mp3", b"x"), user=TEST_USER)
-    assert ei.value.status_code == 502
+    assert ei.value.status_code == 503
+    assert "secret" not in ei.value.detail
+    assert "postgresql" not in ei.value.detail
 
 
 async def test_get_recording_unknown_returns_404(monkeypatch):

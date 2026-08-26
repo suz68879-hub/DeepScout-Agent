@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 from dotenv import load_dotenv
 from sqlalchemy import delete, func, select
+from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 
 from db.models import AppUser, InterviewReport, InterviewSession, Message, Recording, Resume
@@ -42,8 +43,8 @@ async def _build_source(path: Path, prefix: str) -> dict[str, str]:
             (ids["report"], ids["user"], ids["session"], '{"total":90}', '{"summary":"ok"}', '["practice"]', "engineer", "session", f"reports/{prefix}.md", "2026-01-01T00:04:00Z"),
         )
         connection.execute(
-            "INSERT INTO recording VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (ids["recording"], ids["user"], "fixture.wav", "wav", f"recordings/{prefix}.wav", 16, "finished", None, '{"text":"fixture"}', None, ids["report"], "2026-01-01T00:05:00Z", "2026-01-01T00:06:00Z"),
+            "INSERT INTO recording VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (ids["recording"], ids["user"], "fixture.wav", "wav", "engineer", f"recordings/{prefix}.wav", 16, "finished", None, '{"text":"fixture"}', None, ids["report"], "2026-01-01T00:05:00Z", "2026-01-01T00:06:00Z"),
         )
         connection.commit()
     return ids
@@ -52,9 +53,10 @@ async def _build_source(path: Path, prefix: str) -> dict[str, str]:
 @pytest.fixture
 async def migration_target():
     load_dotenv()
-    target = os.getenv("MIGRATION_DATABASE_URL")
-    if not target:
+    target_value = os.getenv("MIGRATION_DATABASE_URL")
+    if not target_value:
         pytest.skip("MIGRATION_DATABASE_URL is required for migration tests")
+    target = make_url(target_value)
     engine = create_async_engine(target)
     sessions = async_sessionmaker(engine, expire_on_commit=False)
     prefix = f"migration_{uuid.uuid4().hex[:10]}"

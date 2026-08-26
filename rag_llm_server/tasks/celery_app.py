@@ -98,7 +98,11 @@ def create_celery_app(config: Config) -> Celery:
                 "options": {"queue": OUTBOX_QUEUE, "routing_key": "outbox"},
             },
         },
-        imports=("tasks.outbox_dispatcher", "tasks.interview_tasks"),
+        imports=(
+            "tasks.outbox_dispatcher",
+            "tasks.interview_tasks",
+            "tasks.recording_tasks",
+        ),
         task_create_missing_queues=False,
         task_default_queue=COLD_QUEUE,
         task_default_delivery_mode=2,

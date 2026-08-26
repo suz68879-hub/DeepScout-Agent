@@ -152,6 +152,7 @@ class PostgresRepository(PostgresAuthRepository):
     RECORDING_COLS = {
         "filename",
         "ext",
+        "position",
         "tos_key",
         "size_bytes",
         "status",
@@ -504,6 +505,7 @@ class PostgresRepository(PostgresAuthRepository):
             user_id=uuid.UUID(user_id),
             filename=recording.get("filename"),
             ext=recording.get("ext"),
+            position=recording.get("position"),
             tos_key=recording.get("tos_key"),
             size_bytes=recording.get("size_bytes"),
             status=recording.get("status", "processing"),

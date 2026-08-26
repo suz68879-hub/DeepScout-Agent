@@ -60,6 +60,23 @@ async def test_submit_builds_request_and_returns_task_id(monkeypatch, api_key):
     assert body["request"]["show_utterances"] is True
 
 
+async def test_submit_reuses_caller_supplied_idempotency_anchor(monkeypatch, api_key):
+    captured = {}
+
+    def responder(call):
+        captured.update(call)
+        return _FakeResponse("20000000")
+
+    monkeypatch.setattr(asr_client.httpx, "AsyncClient", lambda **kw: _FakeClient(responder))
+    task_id = await submit_asr(
+        "https://fake.tos/recording.wav", "wav", task_id="fixed-task-id"
+    )
+
+    assert task_id == "fixed-task-id"
+    assert captured["headers"]["X-Api-Request-Id"] == "fixed-task-id"
+    assert captured["json"]["user"]["uid"] == "fixed-task-id"
+
+
 async def test_submit_raises_asr_error_on_failure_status(monkeypatch, api_key):
     class _Resp:
         def __init__(self):

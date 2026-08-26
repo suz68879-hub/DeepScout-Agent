@@ -48,18 +48,6 @@ async def lifespan(_app: FastAPI):
         if registry.errors:
             logger.warning("Prompt loading warnings: %s", registry.errors)
 
-        try:
-            from services.recording_service import resume_pending
-            from services.storage import get_tos_store
-
-            if get_tos_store() is not None:
-                resumed = await resume_pending()
-                if resumed:
-                    logger.info("Resumed %s pending recording tasks", resumed)
-            else:
-                logger.info("Recording recovery disabled because TOS is not configured")
-        except Exception as exc:
-            logger.error("Recording recovery scan failed error_type=%s", type(exc).__name__)
         yield
     finally:
         await close_graph()
