@@ -1,6 +1,6 @@
 # Phase 4：可观测性体系
 
-> 状态：未开始  
+> 状态：进行中
 > 前置阶段：Phase 1；Redis 观测依赖 Phase 2，队列观测依赖 Phase 3  
 > 建议周期：1～2 个迭代  
 > 阶段负责人：SRE；后端、测试与业务负责人协作
@@ -20,7 +20,7 @@
 
 ## 2. 输入、输出与锁定决策
 
-采用 OpenTelemetry Collector + Prometheus + Tempo + Loki + Grafana。服务统一通过 OTLP/gRPC 上报；本地开发允许 console exporter，但生产禁止。生产采样：错误/高延迟链路 100%，普通链路 head sample 10%；指标不采样。Prometheus/Loki 保留 30 天，Tempo 保留 7 天。metric label 只使用 route template、method、status class、provider、operation、job_type、outcome 等固定枚举。
+采用 OpenTelemetry Collector + Prometheus + Tempo + Loki + Grafana。服务统一通过 OTLP/gRPC 上报；本地开发允许 console exporter，但生产禁止。生产环境由 SDK 全量上报，Collector 尾部采样保留错误/高延迟链路 100%、普通链路 10%；指标不采样。Prometheus/Loki 保留 30 天，Tempo 保留 7 天。metric label 只使用 route template、method、status class、provider、operation、job_type、outcome 等固定枚举。
 
 初始 SLO：API 月可用性≥99.9%；普通 API p95<500ms；实时首 token p95<2s；任务成功率≥99%；Outbox p95<10s；录音任务 p95<20min。上线 30 天后只能通过评审修订，不在实现提交中静默改变。
 
@@ -28,8 +28,9 @@
 
 ### P4-T01 建立 OTel SDK 与 Collector
 
+- **实施状态**：已完成；SDK/Collector 契约、生命周期与后端全量覆盖率门禁通过。
 - **依赖/并行**：Phase 1；最先执行。**规模/角色**：M，后端/SRE。
-- **预计文件**：`rag_llm_server/pyproject.toml`、`rag_llm_server/uv.lock`、`rag_llm_server/observability/telemetry.py`、`observability/otel-collector.yaml`、`rag_llm_server/tests/test_telemetry_config.py`。
+- **预计文件**：`rag_llm_server/pyproject.toml`、`rag_llm_server/uv.lock`、`rag_llm_server/main.py`、`rag_llm_server/observability/telemetry.py`、`observability/otel-collector.yaml`、`rag_llm_server/tests/test_telemetry_config.py`。
 - **契约与步骤**：配置 service.name/version/environment、OTLP endpoint、采样器和资源属性；lifespan 初始化/flush/shutdown；Collector 分离 traces/metrics/logs pipeline。
 - **失败处理**：遥测后端不可用不阻断核心请求，但本地有界队列满后丢弃并计数；生产配置缺 service/environment 时 fail fast。
 - **验证/验收**：SDK 生命周期、采样规则、敏感资源属性和 Collector 配置检查通过；应用关闭能 flush 有界时间。

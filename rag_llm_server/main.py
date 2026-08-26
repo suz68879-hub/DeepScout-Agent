@@ -23,6 +23,11 @@ from db import close_database, init_database
 from logging_config import configure_logging
 from middleware.request_context import RequestContextMiddleware
 from middleware.idempotency import IdempotencyKeyMiddleware
+from observability.telemetry import (
+    TelemetryConfig,
+    initialize_telemetry,
+    shutdown_telemetry,
+)
 from services.redis_client import check_redis_readiness, close_redis, init_redis
 from services.storage import close_storage, init_storage
 
@@ -31,8 +36,9 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    await init_database()
+    initialize_telemetry(TelemetryConfig.from_environment(settings.APP_ENV))
     try:
+        await init_database()
         await init_redis()
         await init_storage()
         if not settings.RTC_CALLBACK_SECRET:
@@ -55,6 +61,12 @@ async def lifespan(_app: FastAPI):
         await close_redis()
         await close_storage()
         await close_database()
+        flushed = await shutdown_telemetry(timeout_seconds=5)
+        if not flushed:
+            logger.warning(
+                "Telemetry shutdown exceeded its time limit",
+                extra={"event": "telemetry_shutdown_timeout"},
+            )
 
 
 async def unhandled_exception_handler(request: Request, exc: Exception):
