@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
+from opentelemetry.trace import NoOpTracerProvider
 from dotenv import load_dotenv
 from sqlalchemy import delete, select
 
@@ -319,7 +320,8 @@ async def test_celery_publisher_routes_allowlisted_job_message():
         created_at=datetime.now(timezone.utc),
     )
 
-    await CeleryOutboxPublisher(FakeApp()).publish(event)
+    tracer = NoOpTracerProvider().get_tracer("test")
+    await CeleryOutboxPublisher(FakeApp(), tracer=tracer).publish(event)
 
     assert calls == [
         (

@@ -3,6 +3,7 @@ import uuid
 from datetime import timedelta
 from enum import StrEnum
 
+from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -45,6 +46,16 @@ _PAYLOAD_RULES = {
         "uuid_fields": frozenset({"recording_id"}),
     },
 }
+
+
+def _trace_context() -> dict[str, str]:
+    carrier: dict[str, str] = {}
+    TraceContextTextMapPropagator().inject(carrier)
+    return {
+        key: value
+        for key, value in carrier.items()
+        if key in {"traceparent", "tracestate"}
+    }
 
 
 def _job_type(value: JobType | str) -> JobType:
@@ -119,6 +130,14 @@ class JobDispatcher:
         except JobConflictError:
             raise JobDispatchError(DispatchErrorCode.JOB_CONFLICT) from None
 
+        event_payload = {
+            "schema_version": 1,
+            "job_id": str(job.id),
+            "job_type": job.job_type,
+        }
+        trace_context = _trace_context()
+        if trace_context:
+            event_payload["trace_context"] = trace_context
         await self._session.execute(
             insert(OutboxEvent)
             .values(
@@ -126,11 +145,7 @@ class JobDispatcher:
                 aggregate_type="background_job",
                 aggregate_id=job.id,
                 event_type="job.created",
-                payload={
-                    "schema_version": 1,
-                    "job_id": str(job.id),
-                    "job_type": job.job_type,
-                },
+                payload=event_payload,
             )
             .on_conflict_do_nothing(constraint="uq_outbox_event_aggregate_event")
         )

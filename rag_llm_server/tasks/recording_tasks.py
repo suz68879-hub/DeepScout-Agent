@@ -12,6 +12,7 @@ from config import Config, settings
 from db import close_database, get_database_runtime, init_database
 from db.engine import DatabaseRuntime
 from db.models import Recording
+from middleware.request_context import job_consumer_span
 from services.asr_client import AsrError
 from services.jobs.handlers import JobType
 from services.jobs.repository import JobRepository
@@ -286,12 +287,7 @@ async def run_recording_job(
             await close_database()
 
 
-@celery_app.task(
-    bind=True,
-    name="tasks.recording_tasks.process_recording",
-    ignore_result=True,
-)
-def process_recording(self, schema_version: int, job_id: str, job_type: str) -> dict:
+def _process_recording(self, schema_version: int, job_id: str, job_type: str) -> dict:
     try:
         result = asyncio.run(
             run_recording_job(
@@ -310,3 +306,18 @@ def process_recording(self, schema_version: int, job_id: str, job_type: str) -> 
             original_queue="deepscout.recording",
         )
     return result
+
+
+@celery_app.task(
+    bind=True,
+    name="tasks.recording_tasks.process_recording",
+    ignore_result=True,
+)
+def process_recording(self, schema_version: int, job_id: str, job_type: str) -> dict:
+    headers = getattr(self.request, "headers", None)
+    with job_consumer_span(
+        headers=headers,
+        job_id=job_id,
+        operation=JobType.RECORDING_PROCESS.value,
+    ):
+        return _process_recording(self, schema_version, job_id, job_type)

@@ -4,10 +4,15 @@ import logging
 import re
 from datetime import datetime, timezone
 
-from middleware.request_context import get_request_id
+from middleware.request_context import (
+    get_job_id,
+    get_request_id,
+    get_span_id,
+    get_trace_id,
+)
 
 _STANDARD_FIELDS = set(logging.makeLogRecord({}).__dict__) | {
-    "message", "asctime", "event", "trace_id", "error_code",
+    "message", "asctime", "event", "trace_id", "span_id", "job_id", "error_code",
 }
 _SENSITIVE_KEYS = {
     "password", "passwd", "cookie", "authorization", "token", "secret",
@@ -57,7 +62,9 @@ class JsonFormatter(logging.Formatter):
             "environment": self.environment,
             "event": getattr(record, "event", "log"),
             "request_id": get_request_id(),
-            "trace_id": getattr(record, "trace_id", None),
+            "trace_id": get_trace_id(),
+            "span_id": get_span_id(),
+            "job_id": get_job_id(),
             "error_code": getattr(record, "error_code", None),
             "message": redact(record.getMessage()),
         }

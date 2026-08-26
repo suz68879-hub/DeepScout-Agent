@@ -12,6 +12,7 @@ from config import Config, settings
 from db import close_database, get_database_runtime, init_database
 from db.engine import DatabaseRuntime
 from db.models import InterviewReport, InterviewSession
+from middleware.request_context import job_consumer_span
 from services.interview_service import ColdPathStateError, run_cold_path
 from services.jobs.handlers import JobType
 from services.jobs.repository import JobRepository
@@ -284,12 +285,7 @@ async def run_interview_job(
                 await close_database()
 
 
-@celery_app.task(
-    bind=True,
-    name="tasks.interview_tasks.finish_interview",
-    ignore_result=True,
-)
-def finish_interview(self, schema_version: int, job_id: str, job_type: str) -> dict:
+def _finish_interview(self, schema_version: int, job_id: str, job_type: str) -> dict:
     try:
         result = asyncio.run(
             run_interview_job(
@@ -310,3 +306,18 @@ def finish_interview(self, schema_version: int, job_id: str, job_type: str) -> d
             original_queue="deepscout.cold",
         )
     return result
+
+
+@celery_app.task(
+    bind=True,
+    name="tasks.interview_tasks.finish_interview",
+    ignore_result=True,
+)
+def finish_interview(self, schema_version: int, job_id: str, job_type: str) -> dict:
+    headers = getattr(self.request, "headers", None)
+    with job_consumer_span(
+        headers=headers,
+        job_id=job_id,
+        operation=JobType.INTERVIEW_FINISH.value,
+    ):
+        return _finish_interview(self, schema_version, job_id, job_type)

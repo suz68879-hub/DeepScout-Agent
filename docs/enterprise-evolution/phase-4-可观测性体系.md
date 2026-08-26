@@ -38,8 +38,9 @@
 
 ### P4-T02 关联 Request ID、Trace ID 与 Job ID
 
+- **实施状态**：已完成；HTTP→Outbox→RabbitMQ→Worker 链路、日志关联、非法上下文重建与 baggage 隔离测试通过。
 - **依赖/并行**：P4-T01、Phase 0 P0-T05/P0-T06。**规模/角色**：M，后端。
-- **预计文件**：`rag_llm_server/middleware/request_context.py`、`rag_llm_server/logging_config.py`、`rag_llm_server/services/jobs/dispatcher.py`、`rag_llm_server/tests/test_trace_correlation.py`。
+- **预计文件**：`rag_llm_server/middleware/request_context.py`、`rag_llm_server/logging_config.py`、`rag_llm_server/services/jobs/dispatcher.py`、`rag_llm_server/services/jobs/outbox.py`、`rag_llm_server/tasks/celery_app.py`、`rag_llm_server/tasks/interview_tasks.py`、`rag_llm_server/tasks/recording_tasks.py`、`rag_llm_server/tests/test_trace_correlation.py`、`rag_llm_server/tests/test_outbox.py`。
 - **契约与步骤**：HTTP 自动生成 server span；日志 Filter 注入 trace/span；Outbox message 注入 W3C trace context，worker 建 consumer span 并关联 job_id。
 - **失败处理**：非法 traceparent 生成新 trace 并记录安全事件；跨异步任务不得复用可变 Context；job payload 不保存完整 baggage。
 - **验证/验收**：API→Outbox→Rabbit→Worker 的测试 spans 共用 trace 或显式 link；日志可用 request_id/trace_id/job_id 关联。

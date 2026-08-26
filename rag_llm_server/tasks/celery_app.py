@@ -1,11 +1,18 @@
 """DeepScout 持久任务的 Celery 应用与 RabbitMQ 队列配置。"""
 
+import asyncio
 import ssl
 
 from celery import Celery
+from celery.signals import worker_process_init, worker_process_shutdown
 from kombu import Exchange, Queue
 
 from config import Config, settings
+from observability.telemetry import (
+    TelemetryConfig,
+    initialize_telemetry,
+    shutdown_telemetry,
+)
 from tasks.retry_policy import DEAD_LETTER_EXCHANGE, DEAD_LETTER_QUEUE
 
 EXCHANGE_NAME = "deepscout.jobs"
@@ -129,3 +136,13 @@ def create_celery_app(config: Config) -> Celery:
 
 
 celery_app = create_celery_app(settings)
+
+
+@worker_process_init.connect
+def initialize_worker_telemetry(**_kwargs) -> None:
+    initialize_telemetry(TelemetryConfig.from_environment(settings.APP_ENV))
+
+
+@worker_process_shutdown.connect
+def shutdown_worker_telemetry(**_kwargs) -> None:
+    asyncio.run(shutdown_telemetry(timeout_seconds=5))

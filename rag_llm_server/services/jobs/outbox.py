@@ -7,6 +7,10 @@ from datetime import datetime, timedelta, timezone
 from typing import Protocol
 
 from celery import Celery
+from opentelemetry import trace
+from opentelemetry.context import Context
+from opentelemetry.trace import SpanKind
+from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -182,7 +186,34 @@ _DELIVERY_ROUTES = {
 }
 
 
-def _delivery_message(event: OutboxRecord) -> tuple[JobType, dict]:
+def _validated_trace_context(value) -> dict[str, str]:
+    if value is None:
+        return {}
+    if (
+        not isinstance(value, dict)
+        or frozenset(value) - {"traceparent", "tracestate"}
+        or not isinstance(value.get("traceparent"), str)
+        or any(not isinstance(item, str) or len(item) > 512 for item in value.values())
+    ):
+        logger.warning(
+            "Rejected invalid trace context",
+            extra={"event": "trace_context_rejected"},
+        )
+        return {}
+    context = TraceContextTextMapPropagator().extract(
+        carrier=value,
+        context=Context(),
+    )
+    if not trace.get_current_span(context).get_span_context().is_valid:
+        logger.warning(
+            "Rejected invalid trace context",
+            extra={"event": "trace_context_rejected"},
+        )
+        return {}
+    return dict(value)
+
+
+def _delivery_message(event: OutboxRecord) -> tuple[JobType, dict, dict[str, str]]:
     payload = event.payload
     try:
         job_id = uuid.UUID(payload["job_id"])
@@ -193,11 +224,22 @@ def _delivery_message(event: OutboxRecord) -> tuple[JobType, dict]:
         event.aggregate_type != "background_job"
         or event.event_type != "job.created"
         or event.aggregate_id != job_id
-        or frozenset(payload) != {"schema_version", "job_id", "job_type"}
+        or frozenset(payload) - {
+            "schema_version",
+            "job_id",
+            "job_type",
+            "trace_context",
+        }
+        or not {"schema_version", "job_id", "job_type"} <= frozenset(payload)
         or payload.get("schema_version") != 1
     ):
         raise OutboxPublishError("INVALID_OUTBOX_MESSAGE")
-    return job_type, dict(payload)
+    message = {
+        "schema_version": payload["schema_version"],
+        "job_id": payload["job_id"],
+        "job_type": payload["job_type"],
+    }
+    return job_type, message, _validated_trace_context(payload.get("trace_context"))
 
 
 class CeleryOutboxPublisher:
@@ -208,28 +250,49 @@ class CeleryOutboxPublisher:
         app: Celery,
         *,
         routes: Mapping[JobType, DeliveryRoute] | None = None,
+        tracer=None,
     ) -> None:
         self._app = app
         self._routes = dict(_DELIVERY_ROUTES if routes is None else routes)
+        self._tracer = tracer or trace.get_tracer(__name__)
 
     async def publish(self, event: OutboxRecord) -> None:
-        job_type, payload = _delivery_message(event)
+        job_type, payload, headers = _delivery_message(event)
         try:
             route = self._routes[job_type]
         except KeyError:
             raise OutboxPublishError("INVALID_OUTBOX_MESSAGE") from None
-        await asyncio.to_thread(
-            self._app.send_task,
-            route.task_name,
-            kwargs=payload,
-            task_id=str(event.aggregate_id),
-            queue=route.queue,
-            routing_key=route.routing_key,
-            serializer="json",
-            delivery_mode=2,
-            mandatory=True,
-            retry=True,
+        parent = TraceContextTextMapPropagator().extract(
+            carrier=headers,
+            context=Context(),
         )
+        with self._tracer.start_as_current_span(
+            f"{route.queue} publish",
+            context=parent,
+            kind=SpanKind.PRODUCER,
+            attributes={
+                "messaging.system": "rabbitmq",
+                "messaging.destination.name": route.queue,
+                "messaging.operation.name": "publish",
+                "job.id": str(event.aggregate_id),
+                "job.type": job_type.value,
+            },
+        ):
+            outbound_headers: dict[str, str] = {}
+            TraceContextTextMapPropagator().inject(outbound_headers)
+            options = {
+                "kwargs": payload,
+                "task_id": str(event.aggregate_id),
+                "queue": route.queue,
+                "routing_key": route.routing_key,
+                "serializer": "json",
+                "delivery_mode": 2,
+                "mandatory": True,
+                "retry": True,
+            }
+            if outbound_headers:
+                options["headers"] = outbound_headers
+            await asyncio.to_thread(self._app.send_task, route.task_name, **options)
 
 
 class OutboxDispatcher:
