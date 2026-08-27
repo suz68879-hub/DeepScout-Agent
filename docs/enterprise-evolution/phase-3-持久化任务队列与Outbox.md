@@ -1,6 +1,6 @@
 # Phase 3：持久化任务队列与 Outbox
 
-> 状态：未开始  
+> 状态：进行中
 > 前置阶段：Phase 2 退出门槛全部通过  
 > 建议周期：2～3 个迭代  
 > 阶段负责人：后端负责人；SRE、测试与前端协作
@@ -36,6 +36,7 @@
 
 ### P3-T01 建立 Celery 与 RabbitMQ 基础
 
+- **实施状态**：已完成；本地 RabbitMQ 4.3.5 持久发布/消费验收通过（18/18）。
 - **依赖/并行**：Phase 2；最先执行。**规模/角色**：M，后端/SRE。
 - **预计文件**：`rag_llm_server/pyproject.toml`、`rag_llm_server/uv.lock`、`rag_llm_server/config.py`、`rag_llm_server/tasks/celery_app.py`、`rag_llm_server/tests/test_celery_config.py`。
 - **契约与步骤**：配置 TLS broker URL、confirm、durable queue、late ack、reject_on_worker_lost、prefetch=1；定义 cold/recording/outbox 路由和独立并发上限。
@@ -45,6 +46,7 @@
 
 ### P3-T02 建立任务与 Outbox 数据模型
 
+- **实施状态**：已完成；空库迁移往返、旧 head 兼容、数据库约束/权限及 Alembic 无漂移验证通过。
 - **依赖/并行**：P3-T01。**规模/角色**：M，后端/DBA。
 - **预计文件**：`rag_llm_server/db/models.py`、新增 Alembic revision、`rag_llm_server/tests/test_job_schema.py`。
 - **契约与步骤**：`background_job` 含 owner/type/status/payload_ref/result_ref/attempt/max_attempts/timestamps/error；`outbox_event` 含 aggregate/event/payload/published_at/attempt/next_attempt_at；建立状态、队列扫描和业务唯一索引。
@@ -54,6 +56,7 @@
 
 ### P3-T03 实现任务状态机 Repository
 
+- **实施状态**：已完成；状态矩阵、并发 claim、终态保护、owner 隔离与租约恢复验证通过。
 - **依赖/并行**：P3-T02。**规模/角色**：M，后端。
 - **预计文件**：`rag_llm_server/services/jobs/repository.py`、`rag_llm_server/services/jobs/types.py`、`rag_llm_server/tests/test_job_repository.py`、`rag_llm_server/tests/test_job_state_machine.py`。
 - **契约与步骤**：提供幂等 create/get/claim/succeed/fail/requeue/cancel；状态转换用条件 UPDATE；owner 查询强制租户隔离；公开错误只保存枚举 error_code。
@@ -63,12 +66,13 @@
 
 #### 检查点 A：P3-T01～P3-T03
 
-- [ ] RabbitMQ 消息配置满足持久化与 late ack。
-- [ ] Schema 只有 expand 变化且旧版本仍能运行。
-- [ ] 并发 worker 只能 claim 同一 job 一次。
+- [x] RabbitMQ 消息配置满足持久化与 late ack。
+- [x] Schema 只有 expand 变化且旧版本仍能运行。
+- [x] 并发 worker 只能 claim 同一 job 一次。
 
 ### P3-T04 建立统一任务分发接口
 
+- **实施状态**：已完成；生产分发仅写入同事务 Job+Outbox，显式 inline adapter、类型路由、幂等与生产环境保护验证通过。
 - **依赖/并行**：检查点 A。**规模/角色**：M，后端。
 - **预计文件**：`rag_llm_server/services/jobs/dispatcher.py`、`rag_llm_server/services/jobs/handlers.py`、`rag_llm_server/tests/test_job_dispatcher.py`、`rag_llm_server/tests/test_job_handlers.py`。
 - **契约与步骤**：定义 `enqueue(job_type, owner_id, payload_ref, idempotency_key)`；生产实现只创建 Job+Outbox；测试提供显式 inline adapter，默认仍验证状态机。
@@ -78,6 +82,7 @@
 
 ### P3-T05 实现 Transactional Outbox 与投递器
 
+- **实施状态**：已完成；PostgreSQL `SKIP LOCKED` 批量 claim、RabbitMQ mandatory publisher confirm、失败退避/告警、短断恢复与重复消息幂等验收通过。
 - **依赖/并行**：P3-T04。**规模/角色**：M，后端/SRE。
 - **预计文件**：`rag_llm_server/services/jobs/outbox.py`、`rag_llm_server/tasks/outbox_dispatcher.py`、`rag_llm_server/tests/test_outbox.py`、`rag_llm_server/tests/integration/test_outbox_rabbitmq.py`。
 - **契约与步骤**：业务/Job/Outbox 同事务；dispatcher 用 `FOR UPDATE SKIP LOCKED` 批量 claim，publisher confirm 后标记 published；重复发布沿用 job_id 幂等。
@@ -87,12 +92,13 @@
 
 #### 检查点 B：P3-T04～P3-T05
 
-- [ ] API 事务提交后必有可恢复 Outbox 记录。
-- [ ] 双 dispatcher 不会永久漏发，重复发布无重复业务效果。
-- [ ] 测试 inline adapter 不可能在生产启用。
+- [x] API 事务提交后必有可恢复 Outbox 记录。
+- [x] 双 dispatcher 不会永久漏发，重复发布无重复业务效果。
+- [x] 测试 inline adapter 不可能在生产启用。
 
 ### P3-T06 迁移面试冷路径任务
 
+- **实施状态**：已完成；冷路径改为 Job+Outbox/Celery 持久执行，逐节点 checkpoint 恢复、同会话串行、重复投递/worker 重启/报告唯一性及进程内 task 清理验证通过；后端 549 passed、17 skipped，覆盖率 83.06%（门槛 81%）。
 - **依赖/并行**：检查点 B。**规模/角色**：M，后端/Agent。
 - **预计文件**：`rag_llm_server/services/interview_service.py`、`rag_llm_server/tasks/interview_tasks.py`、`rag_llm_server/agents/graph.py`、`rag_llm_server/tests/test_interview_service.py`、`rag_llm_server/tests/test_interview_tasks.py`。
 - **契约与步骤**：Evaluator/Planner/Reporter 冷路径以 session_id/job_id 执行；handler 每步读取最新 PG/checkpoint，写入用状态/唯一约束；删除 `_cold_tasks` 和 shutdown gather。
@@ -102,6 +108,7 @@
 
 ### P3-T07 迁移录音处理任务
 
+- **实施状态**：已完成；上传事务原子写入 Recording/Job/Outbox，录音分析改由独立 Celery worker 单步轮询，ASR 幂等锚点、持久 attempt/lease 恢复及报告唯一性验证通过；migration `20260826_0006` 可逆，后端 560 passed、17 skipped，覆盖率 82.93%（门槛 81%）。
 - **依赖/并行**：检查点 B；可与 P3-T06 并行。**规模/角色**：M，后端/Agent。
 - **预计文件**：`rag_llm_server/services/recording_service.py`、`rag_llm_server/tasks/recording_tasks.py`、`rag_llm_server/tests/test_recording_service.py`、`rag_llm_server/tests/test_recording_tasks.py`、`rag_llm_server/tests/test_recording_report_service.py`。
 - **契约与步骤**：上传完成后创建 Job+Outbox；worker 只传 recording_id/TOS key，继续使用 asr_task_id 幂等锚点；删除 `_running_tasks`、`resume_pending` 和 create_task。
@@ -111,6 +118,7 @@
 
 ### P3-T08 发布异步任务 API 与前端轮询
 
+- **实施状态**：已完成；面试结束与录音上传发布 202/持久 job_id，owner-scoped Job API、2～10 秒退避轮询、刷新恢复和安全错误映射验收通过；前端 97 passed、E2E 3 passed，后端 568 passed/17 skipped、覆盖率 82.89%（门槛 81%）。
 - **依赖/并行**：P3-T06、P3-T07。**规模/角色**：M，前后端。
 - **预计文件**：`rag_llm_server/api/interview.py`、`rag_llm_server/api/recording.py`、`rag_llm_server/api/jobs.py`、`src/api/rest.ts`、`src/domain/interview/types.ts`。
 - **契约与步骤**：实现冻结的 202/job 查询响应；job 查询 owner-scoped；前端以 2 秒起步、最大 10 秒退避轮询，终态停止；页面刷新后用 job_id 恢复。
@@ -120,12 +128,13 @@
 
 #### 检查点 C：P3-T06～P3-T08
 
-- [ ] 生产 API 无 `_cold_tasks`、`_running_tasks` 或后台 create_task。
-- [ ] 面试结束与录音任务均返回持久 job_id。
-- [ ] 页面刷新和 API/worker 重启后仍能查询终态。
+- [x] 生产 API 无 `_cold_tasks`、`_running_tasks` 或后台 create_task。
+- [x] 面试结束与录音任务均返回持久 job_id。
+- [x] 页面刷新和 API/worker 重启后仍能查询终态。
 
 ### P3-T09 增加重试与死信队列
 
+- **实施状态**：已完成；PG 锁定 5 档退避与原子终态、参数/权限/安全/未知异常分类、worker-lost 租约恢复及无 PII 持久 DLQ 验收通过；本机 RabbitMQ 集成 1 passed，后端 598 passed/15 skipped、覆盖率 83.15%（门槛 81%），前端 97 passed、E2E 3 passed。
 - **依赖/并行**：检查点 C。**规模/角色**：M，后端/SRE。
 - **预计文件**：`rag_llm_server/tasks/retry_policy.py`、`rag_llm_server/tasks/celery_app.py`、`rag_llm_server/services/jobs/repository.py`、`rag_llm_server/tests/test_retry_policy.py`、`rag_llm_server/tests/integration/test_dead_letter.py`。
 - **契约与步骤**：按锁定退避表分类异常；超过 5 次写 failed 并路由 DLQ；DLQ 消息保留 job_id/error_code/original_queue，不含 PII。
@@ -135,6 +144,7 @@
 
 ### P3-T10 增加受审计任务重放
 
+- **实施状态**：已完成；仅受控 CLI 可创建关联 `replay_of` 的新任务，原 failed 终态保持不变；双人审批、owner/payload/业务结果保护、并发去重、审计链及 dry-run 验收通过。migration `20260826_0007` 完成 `upgrade → downgrade → upgrade` 且 Alembic 无漂移；后端 616 passed、15 skipped，覆盖率 82.89%（门槛 81%），前端 97 passed、E2E 3 passed。
 - **依赖/并行**：P3-T09。**规模/角色**：M，后端/安全。
 - **预计文件**：`rag_llm_server/scripts/replay_job.py`、`rag_llm_server/services/jobs/replay.py`、新增审计字段 revision、`rag_llm_server/tests/test_job_replay.py`、`deploy/runbooks/job-replay.md`。
 - **契约与步骤**：仅 CLI/受控作业执行；要求 operator、reason、原 job_id；创建新 job 并关联 replay_of，不复活原终态；记录时间和结果。
@@ -144,6 +154,7 @@
 
 ### P3-T11 执行队列韧性验收
 
+- **实施状态**：已完成；7 个隔离故障场景各重复 10 次，事务边界、confirm 窗口、worker kill、重复消息、RabbitMQ 短断恢复和明确 DLQ 均通过；业务效果计数始终为 1。后端 623 passed、15 skipped，覆盖率 82.96%（门槛 81%）。
 - **依赖/并行**：P3-T10；最后执行。**规模/角色**：M，测试/SRE。
 - **预计文件**：`rag_llm_server/tests/resilience/test_job_delivery.py`、`scripts/verify_job_resilience.ps1`、`docs/enterprise-evolution/evidence/phase-3-acceptance.md`。
 - **契约与步骤**：覆盖事务提交前后、publish confirm 前后、worker 执行中 kill、重复消息、RabbitMQ 短断和恢复；记录 job/outbox/DLQ 最终状态。
@@ -153,10 +164,10 @@
 
 ## 4. 阶段退出门槛
 
-- [ ] API/Worker/dispatcher 任一重启不静默丢任务。
-- [ ] 重复消息、重试和任务重放不产生重复报告或录音结果。
-- [ ] 所有任务 owner-scoped、可查询、可审计，最终成功或进入明确 DLQ。
-- [ ] 实时 Interviewer 路径延迟未因队列化回归。
+- [x] API/Worker/dispatcher 任一重启不静默丢任务。
+- [x] 重复消息、重试和任务重放不产生重复报告或录音结果。
+- [x] 所有任务 owner-scoped、可查询、可审计，最终成功或进入明确 DLQ。
+- [x] 实时 Interviewer 路径延迟未因队列化回归。
 
 ## 5. 风险与交接
 

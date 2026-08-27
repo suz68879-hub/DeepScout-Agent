@@ -54,8 +54,33 @@ async def _round(g, config, user_text):
     }, as_node="__start__")
     await g.ainvoke(None, config)
     await g.aupdate_state(config, {"messages": [{"role": "assistant", "content": "好的"}]}, as_node="interviewer")
-    await g.ainvoke(None, config)
+    for _ in range(3):
+        snapshot = await g.aget_state(config)
+        if not snapshot.next:
+            break
+        await g.ainvoke(None, config)
     return dict((await g.aget_state(config)).values or {})
+
+
+async def test_evaluator_rejects_non_retryable_model_output(monkeypatch):
+    import agents.graph as graph_module
+
+    async def failed_evaluation(**_kwargs):
+        return {"status": "failed"}
+
+    monkeypatch.setattr(graph_module, "evaluate_round", failed_evaluation)
+    monkeypatch.setattr(graph_module, "get_retriever", lambda: FakeRetriever())
+    monkeypatch.setattr(graph_module, "get_agent_llm", lambda _name: object())
+
+    with pytest.raises(graph_module.ColdPathOutputError, match="EVALUATOR_OUTPUT_INVALID"):
+        await graph_module.evaluator_node({
+            "stage": "technical",
+            "round_no": 0,
+            "position": "Java后端",
+            "messages": [{"role": "user", "content": "回答"}],
+            "scores": [],
+            "current_question": None,
+        })
 
 
 async def test_full_flow_stage_progression(tmp_path, monkeypatch):

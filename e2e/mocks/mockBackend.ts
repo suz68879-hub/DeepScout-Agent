@@ -6,6 +6,7 @@ import type { Page } from '@playwright/test';
 
 export const E2E_SESSION_ID = 'e2e-session';
 export const E2E_REPORT_ID = 'e2e-report';
+export const E2E_JOB_ID = 'e2e-job';
 
 const E2E_REPORT = {
   id: E2E_REPORT_ID,
@@ -32,7 +33,7 @@ const E2E_REPORT = {
   source: 'session',
 };
 
-/** 拦截 /api/**：start/state/finish/reports 返回固定 fixture，其余 404。 */
+/** 拦截 /api/**：start/state/finish/jobs/reports 返回固定 fixture，其余 404。 */
 export function installMockRoutes(
   page: Page,
   options: { authenticated?: boolean } = {}
@@ -76,7 +77,24 @@ export function installMockRoutes(
   });
 
   page.route('**/api/interview/finish', (route) => {
-    void route.fulfill({ json: { report_id: E2E_REPORT_ID } });
+    void route.fulfill({
+      status: 202,
+      json: { job_id: E2E_JOB_ID, session_id: E2E_SESSION_ID, status: 'pending' },
+    });
+  });
+
+  page.route(`**/api/jobs/${E2E_JOB_ID}`, (route) => {
+    void route.fulfill({ json: {
+      job_id: E2E_JOB_ID,
+      type: 'interview.finish',
+      status: 'succeeded',
+      attempt: 1,
+      created_at: '2026-08-26T10:00:00Z',
+      started_at: '2026-08-26T10:00:01Z',
+      finished_at: '2026-08-26T10:00:02Z',
+      result_ref: { report_id: E2E_REPORT_ID },
+      error_code: null,
+    } });
   });
 
   page.route(`**/api/reports/${E2E_REPORT_ID}/export.md`, (route) => {

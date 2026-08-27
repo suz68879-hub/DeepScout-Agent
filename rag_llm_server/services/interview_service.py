@@ -9,11 +9,19 @@ import logging
 import time
 import uuid
 
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from agents.graph import get_graph
 from agents.prompts.registry import registry
 from config import settings
-from services.storage import storage
+from db import session_scope
 from services.clock import utc_now
+from services.jobs.dispatcher import JobDispatcher
+from services.jobs.handlers import JobType
+from services.jobs.repository import JobRepository
+from services.jobs.types import JobRecord, JobStatus
+from services.storage import storage
+from services.storage.postgres import PostgresRepository
 
 DEFAULT_POSITION = "Java后端"
 logger = logging.getLogger(__name__)
@@ -109,63 +117,187 @@ async def _restore_state(session: dict) -> dict:
 
 
 # ---------- 冷路径（Task 13） ----------
-_cold_tasks: dict[str, asyncio.Task] = {}
+class ColdPathStateError(Exception):
+    """不暴露持久化实现细节的稳定冷路径状态错误。"""
 
 
-async def await_pending_cold(session_id: str) -> None:
-    """等待该会话未完成的冷任务（会话级串行化，防并发写图状态）。"""
-    task = _cold_tasks.get(session_id)
-    if task and not task.done():
-        await task
+async def enqueue_cold_path(
+    db_session: AsyncSession,
+    *,
+    owner_id: uuid.UUID | str,
+    session_id: uuid.UUID | str,
+    trigger_id: int,
+) -> JobRecord:
+    """在调用者事务中原子写入冷路径 Job 与 Outbox。"""
+    if type(trigger_id) is not int or trigger_id <= 0:
+        raise ColdPathStateError("INVALID_COLD_PATH_TRIGGER")
+    try:
+        owner_uuid = uuid.UUID(str(owner_id))
+        session_uuid = uuid.UUID(str(session_id))
+    except (TypeError, ValueError, AttributeError):
+        raise ColdPathStateError("INTERVIEW_SESSION_NOT_FOUND") from None
+
+    interview = await PostgresRepository(db_session).session_get(
+        str(owner_uuid), str(session_uuid)
+    )
+    if not interview or interview.get("status") != "running":
+        raise ColdPathStateError("INTERVIEW_SESSION_NOT_FOUND")
+    return await JobDispatcher(db_session).enqueue(
+        job_type=JobType.INTERVIEW_FINISH,
+        owner_id=owner_uuid,
+        payload_ref={
+            "schema_version": 1,
+            "session_id": str(session_uuid),
+            "step": "round",
+        },
+        idempotency_key=f"interview:{session_uuid}:round:{trigger_id}",
+    )
 
 
-async def run_cold_path(session_id: str) -> None:
-    """回合结束后的异步冷路径：评分 → 出题/推进阶段 →（finish）报告落库。"""
+async def _latest_cold_job(session_id: str) -> JobRecord | None:
+    try:
+        session_uuid = uuid.UUID(str(session_id))
+    except (TypeError, ValueError, AttributeError):
+        raise ColdPathStateError("INTERVIEW_SESSION_NOT_FOUND") from None
+    async with session_scope() as db_session:
+        return await JobRepository(db_session).latest_for_session(session_uuid)
+
+
+async def await_pending_cold(
+    session_id: str,
+    *,
+    timeout: float | None = None,
+    poll_interval: float = 0.5,
+) -> None:
+    """在接收下一轮前短暂等待该会话最新的持久冷任务。"""
+    deadline = None if timeout is None else time.monotonic() + max(0.0, timeout)
+    while True:
+        job = await _latest_cold_job(session_id)
+        if job is None or job.status is JobStatus.SUCCEEDED:
+            return
+        if job.status in {JobStatus.FAILED, JobStatus.CANCELLED}:
+            raise ColdPathStateError("PREVIOUS_COLD_PATH_FAILED")
+        if deadline is not None and time.monotonic() >= deadline:
+            raise ColdPathStateError("PREVIOUS_COLD_PATH_PENDING")
+        await asyncio.sleep(poll_interval)
+
+
+async def run_cold_path(job: JobRecord) -> dict:
+    """按 checkpoint 逐步执行评分、出题和报告，每步重新读取持久状态。"""
+    session_id = str(job.payload_ref.get("session_id", ""))
     config = session_config(session_id)
     graph = get_graph()
-    await graph.ainvoke(None, config)  # 从 interviewer 中断处恢复：evaluator → planner → 条件边
-    state = dict((await graph.aget_state(config)).values or {})
-    session = await storage.session_get_internal(session_id)
-    if not session:
-        return
-    await storage.session_update(
-        session["user_id"], session_id, {"stage": state.get("stage", session["stage"])},
-    )
+    state = {}
+    session = None
+    for _ in range(3):
+        session = await storage.session_get_internal(session_id)
+        snapshot = await graph.aget_state(config)
+        state = dict(snapshot.values or {})
+        if (
+            not session
+            or str(session["user_id"]) != str(job.owner_id)
+            or state.get("session_id") != session_id
+        ):
+            raise ColdPathStateError("INTERVIEW_SESSION_NOT_FOUND")
+        if not snapshot.next:
+            if state.get("stage") != session.get("stage"):
+                session = await storage.session_update(
+                    session["user_id"],
+                    session_id,
+                    {"stage": state.get("stage")},
+                    expected_version=session["version"],
+                )
+                if not session:
+                    raise ColdPathStateError("INTERVIEW_SESSION_NOT_FOUND")
+            break
+        node = snapshot.next[0]
+        if node not in {"evaluator", "planner", "reporter"}:
+            raise ColdPathStateError("INVALID_COLD_PATH_CHECKPOINT")
+        logger.info(
+            "Interview cold-path step started",
+            extra={
+                "event": "interview_cold_step_started",
+                "job_id": str(job.id),
+                "session_id": session_id,
+                "step": node,
+            },
+        )
+        await graph.ainvoke(None, config)
+        state = dict((await graph.aget_state(config)).values or {})
+        session = await storage.session_update(
+            session["user_id"],
+            session_id,
+            {"stage": state.get("stage", session["stage"])},
+            expected_version=session["version"],
+        )
+        if not session:
+            raise ColdPathStateError("INTERVIEW_SESSION_NOT_FOUND")
+
     report = state.get("report")
     if report:
         from services.report_service import save_report
 
-        await save_report(session, report, state)
+        report_id = await save_report(session, report, state)
         await storage.session_update(session["user_id"], session_id, {
             "status": "finished", "stage": "finish", "ended_at": utc_now(),
-        })
+        }, expected_version=session["version"])
+        return {
+            "schema_version": 1,
+            "session_id": session_id,
+            "report_id": report_id,
+        }
+    return {"schema_version": 1, "session_id": session_id}
 
 
-async def _serialized_cold(session_id: str, pending: asyncio.Task | None) -> None:
+async def schedule_cold_path(
+    session_id: str,
+    owner_id: str,
+    trigger_id: int,
+) -> JobRecord:
+    """提交持久化冷路径 Job/Outbox 后返回。"""
+    async with session_scope() as db_session:
+        return await enqueue_cold_path(
+            db_session,
+            owner_id=owner_id,
+            session_id=session_id,
+            trigger_id=trigger_id,
+        )
+
+
+async def enqueue_finish_job(
+    db_session: AsyncSession,
+    *,
+    owner_id: uuid.UUID | str,
+    session_id: uuid.UUID | str,
+) -> JobRecord:
+    """Atomically create the one durable finish Job and Outbox per session."""
     try:
-        if pending and not pending.done():
-            await pending
-        await run_cold_path(session_id)
-    except Exception:
-        logger.warning("Cold-path task failed session=%s", session_id)
-    finally:
-        # 身份守卫：只清理自己的条目，避免误删已被 newer 任务替换的项（R-T13-4）
-        if _cold_tasks.get(session_id) is asyncio.current_task():
-            _cold_tasks.pop(session_id, None)
+        owner_uuid = uuid.UUID(str(owner_id))
+        session_uuid = uuid.UUID(str(session_id))
+    except (TypeError, ValueError, AttributeError):
+        raise ColdPathStateError("INTERVIEW_SESSION_NOT_FOUND") from None
+    interview = await PostgresRepository(db_session).session_get(
+        str(owner_uuid), str(session_uuid)
+    )
+    if interview is None:
+        raise ColdPathStateError("INTERVIEW_SESSION_NOT_FOUND")
+    return await JobDispatcher(db_session).enqueue(
+        job_type=JobType.INTERVIEW_FINISH,
+        owner_id=owner_uuid,
+        payload_ref={
+            "schema_version": 1,
+            "session_id": str(session_uuid),
+            "step": "finish",
+        },
+        idempotency_key=f"interview:{session_uuid}:finish",
+    )
 
 
-def schedule_cold_path(session_id: str) -> None:
-    """调度冷路径任务（fire-and-forget，绝不阻塞 SSE）。"""
-    pending = _cold_tasks.pop(session_id, None)
-    _cold_tasks[session_id] = asyncio.create_task(_serialized_cold(session_id, pending))
-
-
-async def shutdown_cold_tasks() -> None:
-    """应用关闭时取消并回收尚未完成的进程内冷任务。"""
-    tasks = list(_cold_tasks.values())
-    _cold_tasks.clear()
-    for task in tasks:
-        if not task.done():
-            task.cancel()
-    if tasks:
-        await asyncio.gather(*tasks, return_exceptions=True)
+async def schedule_finish_job(
+    session_id: str,
+    owner_id: str,
+) -> JobRecord:
+    async with session_scope() as db_session:
+        return await enqueue_finish_job(
+            db_session, owner_id=owner_id, session_id=session_id
+        )

@@ -8,6 +8,8 @@ from typing import AsyncIterator
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
+from observability.metrics import service_metrics
+
 from .prompts.registry import registry
 
 logger = logging.getLogger(__name__)
@@ -83,6 +85,7 @@ async def generate_stream(state: dict, user_text: str, llm) -> AsyncIterator[str
 
     异常处理：捕获后产出错误话术 chunk（绝不静默空返回，§1.7）。
     """
+    first_token = service_metrics.first_token_timer()
     try:
         history = [{"role": m["role"], "content": m["content"]} for m in state.get("messages", [])]
         history.append({"role": "user", "content": user_text})
@@ -94,6 +97,10 @@ async def generate_stream(state: dict, user_text: str, llm) -> AsyncIterator[str
         yielded = False
         async for chunk in llm.astream(msgs):
             if chunk.content:
+                try:
+                    first_token.observe()
+                except Exception:
+                    pass
                 yielded = True
                 yield chunk.content
         if not yielded:

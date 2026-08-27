@@ -19,6 +19,11 @@ async def test_user_and_auth_session_contract(repository_scope):
 
     async with scope() as repository:
         assert await repository.auth_session_get_user("a" * 64) == user
+        session = await repository.auth_session_get("a" * 64)
+        assert session == {
+            "user": user,
+            "expires_at": "2999-01-01T00:00:00+00:00",
+        }
         await repository.auth_session_revoke("a" * 64)
 
     async with scope() as repository:

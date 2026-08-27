@@ -46,6 +46,9 @@ async def test_save_recording_report(tmp_path, monkeypatch):
     report_id = await save_recording_report(
         "rec1", report, "Java backend", transcript, assignment,
     )
+    repeated_id = await save_recording_report(
+        "rec1", report, "Java backend", transcript, assignment,
+    )
     row = await storage.report_get(user_id, report_id)
     feedback = json.loads(row["feedback_json"])
     assert row["session_id"] is None
@@ -54,4 +57,6 @@ async def test_save_recording_report(tmp_path, monkeypatch):
     assert feedback["transcript"] == transcript
     assert feedback["speaker_assignment"] == assignment
     assert feedback["round_scores"] == []
+    assert repeated_id == report_id == "rec1"
+    assert len(await storage.report_list(user_id)) == 1
     await storage.close()

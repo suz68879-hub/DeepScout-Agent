@@ -32,6 +32,8 @@ class BaseStorage(ABC):
     @abstractmethod
     async def auth_session_get_user(self, token_hash: str) -> dict | None: ...
     @abstractmethod
+    async def auth_session_get(self, token_hash: str) -> dict | None: ...
+    @abstractmethod
     async def auth_session_revoke(self, token_hash: str) -> None: ...
 
     # resume
@@ -60,6 +62,14 @@ class BaseStorage(ABC):
         session_id: str,
         patch: dict,
         expected_version: int | None = None,
+    ) -> dict | None: ...
+    @abstractmethod
+    async def session_claim_rtc_fence(
+        self, user_id: str, session_id: str, fencing_token: int
+    ) -> dict | None: ...
+    @abstractmethod
+    async def session_update_rtc_status(
+        self, user_id: str, session_id: str, rtc_status: str, fencing_token: int
     ) -> dict | None: ...
     @abstractmethod
     async def session_list_running(self, user_id: str) -> list[dict]: ...

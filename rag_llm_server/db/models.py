@@ -3,6 +3,7 @@ from datetime import datetime
 
 from sqlalchemy import (
     BigInteger,
+    CheckConstraint,
     DateTime,
     ForeignKey,
     ForeignKeyConstraint,
@@ -113,6 +114,9 @@ class InterviewSession(Base):
     rtc_status: Mapped[str] = mapped_column(
         String(32), nullable=False, server_default=text("'created'")
     )
+    rtc_fencing_token: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, server_default=text("0")
+    )
     version: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("1"))
 
     __table_args__ = (
@@ -213,6 +217,7 @@ class Recording(Base):
     )
     filename: Mapped[str | None] = mapped_column(Text)
     ext: Mapped[str | None] = mapped_column(String(32))
+    position: Mapped[str | None] = mapped_column(Text)
     tos_key: Mapped[str | None] = mapped_column(Text)
     size_bytes: Mapped[int | None] = mapped_column(BigInteger)
     status: Mapped[str | None] = mapped_column(String(32))
@@ -233,4 +238,176 @@ class Recording(Base):
             ondelete="RESTRICT",
         ),
         Index("ix_recording_user_created_id", user_id, created_at.desc(), id.desc()),
+    )
+
+
+class BackgroundJob(Base):
+    __tablename__ = "background_job"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    owner_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("app_user.id", name="fk_background_job_owner", ondelete="CASCADE"),
+        nullable=False,
+    )
+    job_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, server_default=text("'pending'")
+    )
+    idempotency_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    payload_ref: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    result_ref: Mapped[dict | None] = mapped_column(JSONB)
+    attempt: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    max_attempts: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("5")
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    error_code: Mapped[str | None] = mapped_column(String(64))
+    replay_of: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    replay_operator: Mapped[str | None] = mapped_column(String(128))
+    replay_approved_by: Mapped[str | None] = mapped_column(String(128))
+    replay_reason: Mapped[str | None] = mapped_column(String(512))
+    replayed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('pending', 'running', 'succeeded', 'failed', 'cancelled')",
+            name="status_allowed",
+        ),
+        CheckConstraint(
+            "attempt >= 0 AND max_attempts BETWEEN 1 AND 5 AND attempt <= max_attempts",
+            name="attempt_range",
+        ),
+        CheckConstraint(
+            "jsonb_typeof(payload_ref) = 'object' "
+            "AND payload_ref -> 'schema_version' = '1'::jsonb "
+            "AND payload_ref - ARRAY['schema_version', 'session_id', 'recording_id', "
+            "'tos_key', 'step', 'source_job_id']::text[] = '{}'::jsonb "
+            "AND octet_length(payload_ref::text) <= 4096",
+            name="payload_ref_allowed",
+        ),
+        CheckConstraint(
+            "result_ref IS NULL OR ("
+            "jsonb_typeof(result_ref) = 'object' "
+            "AND result_ref -> 'schema_version' = '1'::jsonb "
+            "AND result_ref - ARRAY['schema_version', 'session_id', 'recording_id', "
+            "'report_id', 'object_key']::text[] = '{}'::jsonb "
+            "AND octet_length(result_ref::text) <= 4096)",
+            name="result_ref_allowed",
+        ),
+        CheckConstraint(
+            "error_code IS NULL OR error_code ~ '^[A-Z][A-Z0-9_]{0,63}$'",
+            name="error_code_format",
+        ),
+        CheckConstraint(
+            "(replay_of IS NULL AND replay_operator IS NULL "
+            "AND replay_approved_by IS NULL AND replay_reason IS NULL "
+            "AND replayed_at IS NULL) OR "
+            "(replay_of IS NOT NULL AND replay_of <> id "
+            "AND char_length(replay_operator) BETWEEN 3 AND 128 "
+            "AND replay_operator = btrim(replay_operator) "
+            "AND replay_operator !~ '[[:cntrl:][:space:]]' "
+            "AND (replay_approved_by IS NULL OR ("
+            "char_length(replay_approved_by) BETWEEN 3 AND 128 "
+            "AND replay_approved_by = btrim(replay_approved_by) "
+            "AND replay_approved_by !~ '[[:cntrl:][:space:]]')) "
+            "AND char_length(replay_reason) BETWEEN 10 AND 512 "
+            "AND replay_reason = btrim(replay_reason) "
+            "AND replay_reason !~ '[[:cntrl:]]' "
+            "AND replayed_at IS NOT NULL)",
+            name="replay_audit_complete",
+        ),
+        ForeignKeyConstraint(
+            ["replay_of"],
+            ["background_job.id"],
+            name="fk_background_job_replay_of",
+            ondelete="CASCADE",
+        ),
+        UniqueConstraint("replay_of", name="uq_background_job_replay_of"),
+        Index(
+            "uq_background_job_owner_type_idempotency",
+            owner_id,
+            job_type,
+            idempotency_key,
+            unique=True,
+        ),
+        Index(
+            "ix_background_job_owner_created_id",
+            owner_id,
+            created_at.desc(),
+            id.desc(),
+        ),
+        Index(
+            "ix_background_job_pending_scan",
+            job_type,
+            created_at,
+            id,
+            postgresql_where=text("status = 'pending'"),
+        ),
+        Index(
+            "ix_background_job_running_lease",
+            lease_expires_at,
+            id,
+            postgresql_where=text("status = 'running'"),
+        ),
+    )
+
+
+class OutboxEvent(Base):
+    __tablename__ = "outbox_event"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    aggregate_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    aggregate_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey(
+            "background_job.id",
+            name="fk_outbox_event_aggregate_job",
+            ondelete="CASCADE",
+        ),
+        nullable=False,
+    )
+    event_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    payload: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    attempt: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    next_attempt_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint("attempt >= 0", name="attempt_nonnegative"),
+        CheckConstraint(
+            "aggregate_type = 'background_job'", name="aggregate_type_allowed"
+        ),
+        CheckConstraint(
+            "jsonb_typeof(payload) = 'object' "
+            "AND payload -> 'schema_version' = '1'::jsonb "
+            "AND jsonb_typeof(payload -> 'job_id') = 'string' "
+            "AND payload ->> 'job_id' = aggregate_id::text "
+            "AND jsonb_typeof(payload -> 'job_type') = 'string' "
+            "AND payload - ARRAY['schema_version', 'job_id', 'job_type']::text[] "
+            "= '{}'::jsonb "
+            "AND octet_length(payload::text) <= 4096",
+            name="payload_allowed",
+        ),
+        UniqueConstraint("aggregate_id", "event_type", name="uq_outbox_event_aggregate_event"),
+        Index(
+            "ix_outbox_event_unpublished_scan",
+            next_attempt_at,
+            created_at,
+            id,
+            postgresql_where=text("published_at IS NULL"),
+        ),
     )

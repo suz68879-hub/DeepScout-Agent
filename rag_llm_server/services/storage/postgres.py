@@ -107,16 +107,28 @@ class PostgresAuthRepository:
         await self._session.flush()
 
     async def auth_session_get_user(self, token_hash: str) -> dict | None:
-        user = await self._session.scalar(
-            select(AppUser)
+        session = await self.auth_session_get(token_hash)
+        return session["user"] if session else None
+
+    async def auth_session_get(self, token_hash: str) -> dict | None:
+        row = (
+            await self._session.execute(
+                select(AppUser, AuthSession.expires_at)
             .join(AuthSession, AuthSession.user_id == AppUser.id)
             .where(
                 AuthSession.token_hash == token_hash,
                 AuthSession.revoked_at.is_(None),
                 AuthSession.expires_at > func.now(),
             )
-        )
-        return _user_dict(user) if user else None
+            )
+        ).one_or_none()
+        if row is None:
+            return None
+        user, expires_at = row
+        return {
+            "user": _user_dict(user),
+            "expires_at": expires_at.astimezone(timezone.utc).isoformat(),
+        }
 
     async def auth_session_revoke(self, token_hash: str) -> None:
         await self._session.execute(
@@ -140,6 +152,7 @@ class PostgresRepository(PostgresAuthRepository):
     RECORDING_COLS = {
         "filename",
         "ext",
+        "position",
         "tos_key",
         "size_bytes",
         "status",
@@ -237,6 +250,7 @@ class PostgresRepository(PostgresAuthRepository):
             rtc_task_id=session.get("rtc_task_id", task_id),
             rtc_callback_id=session.get("rtc_callback_id", callback_id),
             rtc_status=session.get("rtc_status", "created"),
+            rtc_fencing_token=session.get("rtc_fencing_token", 0),
             version=session.get("version", 1),
         )
         self._session.add(model)
@@ -253,6 +267,42 @@ class PostgresRepository(PostgresAuthRepository):
                 InterviewSession.user_id == uuid.UUID(user_id),
             )
         )
+        return _row_dict(model) if model else None
+
+    async def session_claim_rtc_fence(
+        self, user_id: str, session_id: str, fencing_token: int
+    ) -> dict | None:
+        statement = (
+            update(InterviewSession)
+            .where(
+                InterviewSession.id == uuid.UUID(session_id),
+                InterviewSession.user_id == uuid.UUID(user_id),
+                InterviewSession.rtc_fencing_token < fencing_token,
+            )
+            .values(rtc_fencing_token=fencing_token)
+            .returning(InterviewSession)
+        )
+        model = await self._session.scalar(statement)
+        if model is None and await self.session_get(user_id, session_id):
+            raise StorageVersionConflictError("RTC fencing token conflict")
+        return _row_dict(model) if model else None
+
+    async def session_update_rtc_status(
+        self, user_id: str, session_id: str, rtc_status: str, fencing_token: int
+    ) -> dict | None:
+        statement = (
+            update(InterviewSession)
+            .where(
+                InterviewSession.id == uuid.UUID(session_id),
+                InterviewSession.user_id == uuid.UUID(user_id),
+                InterviewSession.rtc_fencing_token == fencing_token,
+            )
+            .values(rtc_status=rtc_status)
+            .returning(InterviewSession)
+        )
+        model = await self._session.scalar(statement)
+        if model is None and await self.session_get(user_id, session_id):
+            raise StorageVersionConflictError("RTC fencing token conflict")
         return _row_dict(model) if model else None
 
     async def session_get_internal(self, session_id: str) -> dict | None:
@@ -455,6 +505,7 @@ class PostgresRepository(PostgresAuthRepository):
             user_id=uuid.UUID(user_id),
             filename=recording.get("filename"),
             ext=recording.get("ext"),
+            position=recording.get("position"),
             tos_key=recording.get("tos_key"),
             size_bytes=recording.get("size_bytes"),
             status=recording.get("status", "processing"),
@@ -548,6 +599,9 @@ class PostgresStorage(BaseStorage):
     async def auth_session_get_user(self, token_hash):
         return await self._call("auth_session_get_user", token_hash)
 
+    async def auth_session_get(self, token_hash):
+        return await self._call("auth_session_get", token_hash)
+
     async def auth_session_revoke(self, token_hash):
         return await self._call("auth_session_revoke", token_hash)
 
@@ -586,6 +640,22 @@ class PostgresStorage(BaseStorage):
     ):
         return await self._call(
             "session_update", user_id, session_id, patch, expected_version
+        )
+
+    async def session_claim_rtc_fence(self, user_id, session_id, fencing_token):
+        return await self._call(
+            "session_claim_rtc_fence", user_id, session_id, fencing_token
+        )
+
+    async def session_update_rtc_status(
+        self, user_id, session_id, rtc_status, fencing_token
+    ):
+        return await self._call(
+            "session_update_rtc_status",
+            user_id,
+            session_id,
+            rtc_status,
+            fencing_token,
         )
 
     async def session_list_running(self, user_id):

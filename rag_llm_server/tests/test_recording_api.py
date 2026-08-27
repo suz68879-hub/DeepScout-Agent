@@ -1,13 +1,11 @@
 """P6 T7：录音 API 边界校验与状态查询。"""
+import hashlib
 import io
 
 import pytest
 from fastapi import HTTPException, UploadFile
 
 from api import recording as rec_api
-from services.asr_client import AsrError
-
-
 TEST_USER = {"id": "u1", "username": "alice"}
 
 
@@ -48,7 +46,7 @@ async def test_upload_happy_path(monkeypatch):
 
     async def fake_upload(user_id, filename, ext, raw, position):
         captured.update({"filename": filename, "ext": ext, "raw": raw, "position": position})
-        return {"id": "r1", "status": "processing"}
+        return {"id": "r1", "job_id": "j1", "status": "processing"}
 
     monkeypatch.setattr(rec_api, "upload_recording", fake_upload)
     # 走真实请求管线（TestClient）而非直接调用：position 缺省经 FastAPI 依赖注入
@@ -64,10 +62,41 @@ async def test_upload_happy_path(monkeypatch):
         "/api/recording/upload",
         files={"file": ("a.wav", b"RIFF", "audio/wav")},
     )
-    assert resp.status_code == 200
-    assert resp.json() == {"recording_id": "r1", "status": "processing"}
+    assert resp.status_code == 202
+    assert resp.json() == {"recording_id": "r1", "job_id": "j1", "status": "processing"}
     assert captured["filename"] == "a.wav" and captured["ext"] == "wav"
     assert captured["raw"] == b"RIFF" and captured["position"] == "真实面试录音"
+
+
+async def test_upload_idempotency_fingerprint_contains_hash_not_audio(monkeypatch):
+    captured = {}
+
+    async def fake_upload(user_id, filename, ext, raw, position):
+        return {"id": "r1", "job_id": "j1", "status": "processing"}
+
+    async def fake_execute(request, user, body, operation):
+        captured.update({"request": request, "user": user, "body": body})
+        return await operation()
+
+    monkeypatch.setattr(rec_api, "upload_recording", fake_upload)
+    monkeypatch.setattr(rec_api, "execute_idempotent", fake_execute)
+    request = object()
+    result = await rec_api.upload_recording_file(
+        _upload("a.wav", b"RIFF"),
+        position="Backend",
+        user=TEST_USER,
+        request=request,
+    )
+    assert result == {"recording_id": "r1", "job_id": "j1", "status": "processing"}
+    assert captured == {
+        "request": request,
+        "user": TEST_USER,
+        "body": {
+            "filename": "a.wav",
+            "position": "Backend",
+            "content_sha256": hashlib.sha256(b"RIFF").hexdigest(),
+        },
+    }
 
 
 async def test_upload_tos_unavailable_returns_503(monkeypatch):
@@ -78,17 +107,19 @@ async def test_upload_tos_unavailable_returns_503(monkeypatch):
     with pytest.raises(HTTPException) as ei:
         await rec_api.upload_recording_file(_upload("a.mp3", b"x"), user=TEST_USER)
     assert ei.value.status_code == 503
-    assert "TOS" in ei.value.detail
+    assert "TOS" not in ei.value.detail
 
 
-async def test_upload_submit_failure_returns_502(monkeypatch):
+async def test_upload_job_creation_failure_hides_internal_details(monkeypatch):
     async def fake_upload(user_id, filename, ext, raw, position):
-        raise AsrError("45000151", "音频格式不正确")
+        raise RuntimeError("postgresql://user:secret@internal/database")
 
     monkeypatch.setattr(rec_api, "upload_recording", fake_upload)
     with pytest.raises(HTTPException) as ei:
         await rec_api.upload_recording_file(_upload("a.mp3", b"x"), user=TEST_USER)
-    assert ei.value.status_code == 502
+    assert ei.value.status_code == 503
+    assert "secret" not in ei.value.detail
+    assert "postgresql" not in ei.value.detail
 
 
 async def test_get_recording_unknown_returns_404(monkeypatch):

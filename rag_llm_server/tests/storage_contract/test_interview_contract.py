@@ -69,3 +69,32 @@ async def test_session_optimistic_update_contract(repository_scope):
             await repository.session_update(
                 alice["id"], session["id"], {"stage": "closing"}, expected_version=1
             )
+
+
+async def test_rtc_fencing_contract(repository_scope):
+    prefix, scope = repository_scope
+    alice, bob = await _users(prefix, scope)
+    async with scope() as repository:
+        session = await repository.session_create(
+            alice["id"],
+            {"position": "Backend", "stage": "intro", "status": "running"},
+        )
+
+    async with scope() as repository:
+        assert await repository.session_claim_rtc_fence(
+            bob["id"], session["id"], 1
+        ) is None
+        claimed = await repository.session_claim_rtc_fence(
+            alice["id"], session["id"], 2
+        )
+        assert claimed["rtc_fencing_token"] == 2
+
+    async with scope() as repository:
+        with pytest.raises(StorageVersionConflictError):
+            await repository.session_update_rtc_status(
+                alice["id"], session["id"], "running", 1
+            )
+        updated = await repository.session_update_rtc_status(
+            alice["id"], session["id"], "running", 2
+        )
+        assert updated["rtc_status"] == "running"

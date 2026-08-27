@@ -4,6 +4,7 @@ import json
 from jinja2 import Template
 
 from services.storage import get_file_store, storage
+from services.storage.base import StorageConflictError
 from services.clock import utc_now
 
 file_store = get_file_store()
@@ -107,22 +108,28 @@ async def save_recording_report(recording_id: str, report: dict, position: str,
         raise ValueError("recording not found")
     rel = f"users/{recording['user_id']}/reports/{recording_id}/report.md"
     md_path = await file_store.save_text(rel, md)
-    row = await storage.report_create(recording["user_id"], {
-        "session_id": None,
-        "source": "recording",
-        "position": position,
-        "scores_json": json.dumps(report["dimension_scores"], ensure_ascii=False),
-        "feedback_json": json.dumps({
-            "summary": report["summary"],
-            "round_details": report["round_details"],
-            "round_scores": [],
-            "strengths": report["strengths"],
-            "improvements": report["improvements"],
-            "transcript": transcript,
-            "speaker_assignment": assignment,
-        }, ensure_ascii=False),
-        "suggestions_json": json.dumps(report["suggestions"], ensure_ascii=False),
-        "md_path": md_path,
-        "created_at": utc_now(),
-    })
+    try:
+        row = await storage.report_create(recording["user_id"], {
+            "id": recording_id,
+            "session_id": None,
+            "source": "recording",
+            "position": position,
+            "scores_json": json.dumps(report["dimension_scores"], ensure_ascii=False),
+            "feedback_json": json.dumps({
+                "summary": report["summary"],
+                "round_details": report["round_details"],
+                "round_scores": [],
+                "strengths": report["strengths"],
+                "improvements": report["improvements"],
+                "transcript": transcript,
+                "speaker_assignment": assignment,
+            }, ensure_ascii=False),
+            "suggestions_json": json.dumps(report["suggestions"], ensure_ascii=False),
+            "md_path": md_path,
+            "created_at": utc_now(),
+        })
+    except StorageConflictError:
+        row = await storage.report_get(recording["user_id"], recording_id)
+        if row is None or row.get("source") != "recording":
+            raise
     return row["id"]

@@ -17,7 +17,7 @@ test('面试间：字幕驱动 → 结束面试 → 报告页', async ({ page })
   // E2E 占位自视窗存在（无 RTC 引擎）
   await expect(page.getByTestId('e2e-selfview')).toBeVisible();
 
-  // 结束面试 → 跳转报告页（mock finish 返回 e2e-report）
+  // 结束面试 → 查询持久任务终态 → 跳转报告页
   await page.getByRole('button', { name: '结束面试' }).click();
   await page.waitForURL(`**/report/${E2E_REPORT_ID}`);
 

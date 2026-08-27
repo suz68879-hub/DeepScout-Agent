@@ -1,6 +1,10 @@
+from contextlib import asynccontextmanager
+
 import pytest
 
 import services.rtc_service as rtc_service
+from services.distributed_lock import LockLost
+from services.storage.base import StorageVersionConflictError
 
 
 def _session(**overrides):
@@ -68,3 +72,61 @@ async def test_start_requires_server_url(monkeypatch):
     monkeypatch.setattr(rtc_service.settings, "SERVER_URL", None)
     with pytest.raises(rtc_service.RTCConfigurationError):
         await rtc_service.build_voice_chat_body("StartVoiceChat", _session(), {})
+
+
+async def test_rtc_fencing_rejects_stale_status_update(tmp_storage):
+    repository = await tmp_storage()
+    owner = await repository.user_create("owner", "hash")
+    stranger = await repository.user_create("stranger", "hash")
+    session_data = _session()
+    session_data.pop("id")
+    session = await repository.session_create(owner["id"], session_data)
+
+    assert await repository.session_claim_rtc_fence(
+        stranger["id"], session["id"], 1
+    ) is None
+    claimed = await repository.session_claim_rtc_fence(owner["id"], session["id"], 2)
+    assert claimed["rtc_fencing_token"] == 2
+
+    with pytest.raises(StorageVersionConflictError):
+        await repository.session_update_rtc_status(
+            owner["id"], session["id"], "running", 1
+        )
+    updated = await repository.session_update_rtc_status(
+        owner["id"], session["id"], "running", 2
+    )
+    assert updated["rtc_status"] == "running"
+
+
+async def test_lost_lease_stops_start_before_provider_call(monkeypatch):
+    session = _session()
+
+    class Lease:
+        fencing_token = 1
+
+        async def assert_owned(self):
+            raise LockLost("lost")
+
+    class Manager:
+        @asynccontextmanager
+        async def lease_wait(self, *_args, **_kwargs):
+            yield Lease()
+
+    async def get_session(*_args):
+        return dict(session)
+
+    async def claim(*_args):
+        return {**session, "rtc_fencing_token": 1}
+
+    async def forbidden_provider(*_args):
+        raise AssertionError("provider must not run after lease loss")
+
+    monkeypatch.setattr(rtc_service.storage, "session_get", get_session)
+    monkeypatch.setattr(rtc_service.storage, "session_claim_rtc_fence", claim)
+    monkeypatch.setattr(rtc_service, "get_rtc_lock", lambda: Manager())
+    monkeypatch.setattr(rtc_service, "_call_provider", forbidden_provider)
+
+    with pytest.raises(LockLost):
+        await rtc_service.call_voice_chat_openapi(
+            "StartVoiceChat", "2024-12-01", session, {}
+        )

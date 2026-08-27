@@ -1,0 +1,32 @@
+{
+  "annotations": {"list": []},
+  "description": "后台任务吞吐、成功率、耗时、队列积压、年龄、Outbox 与 DLQ。",
+  "editable": false,
+  "graphTooltip": 1,
+  "links": [
+    {"title": "Worker logs", "type": "link", "url": "/explore?orgId=1&left={\"datasource\":\"loki\",\"queries\":[{\"expr\":\"{service_name=\\\"$service\\\",environment=\\\"$environment\\\"} | json | job_type=\\\"$job_type\\\"\"}]}"},
+    {"title": "Worker traces", "type": "link", "url": "/explore?orgId=1&left={\"datasource\":\"tempo\",\"queries\":[{\"query\":\"{resource.service.name=\\\"$service\\\" && span.job.type=\\\"$job_type\\\"}\"}]}"}
+  ],
+  "panels": [
+    {"id": 1, "title": "Terminal job rate", "type": "timeseries", "gridPos": {"h": 8, "w": 8, "x": 0, "y": 0}, "datasource": {"type": "prometheus", "uid": "prometheus"}, "targets": [{"expr": "sum by (outcome) (rate(background_jobs_total{environment=\"$environment\",service=\"$service\",job_type=\"$job_type\"}[5m]))", "legendFormat": "{{outcome}}"}]},
+    {"id": 2, "title": "Job success ratio (target 99%)", "type": "timeseries", "gridPos": {"h": 8, "w": 8, "x": 8, "y": 0}, "datasource": {"type": "prometheus", "uid": "prometheus"}, "fieldConfig": {"defaults": {"unit": "percentunit", "min": 0, "max": 1}}, "targets": [{"expr": "sum(rate(background_jobs_total{environment=\"$environment\",service=\"$service\",job_type=\"$job_type\",outcome=\"succeeded\"}[30m])) / sum(rate(background_jobs_total{environment=\"$environment\",service=\"$service\",job_type=\"$job_type\"}[30m]))", "legendFormat": "success"}]},
+    {"id": 3, "title": "Job duration p95", "type": "timeseries", "gridPos": {"h": 8, "w": 8, "x": 16, "y": 0}, "datasource": {"type": "prometheus", "uid": "prometheus"}, "fieldConfig": {"defaults": {"unit": "s"}}, "targets": [{"expr": "histogram_quantile(0.95, sum by (le) (rate(background_job_duration_seconds_bucket{environment=\"$environment\",service=\"$service\",job_type=\"$job_type\"}[10m])))", "legendFormat": "p95"}]},
+    {"id": 4, "title": "Persisted queue depth", "type": "timeseries", "gridPos": {"h": 8, "w": 8, "x": 0, "y": 8}, "datasource": {"type": "prometheus", "uid": "prometheus"}, "targets": [{"expr": "background_queue_depth{environment=\"$environment\",service=\"$service\"}", "legendFormat": "{{queue}}"}]},
+    {"id": 5, "title": "Oldest pending job age", "type": "timeseries", "gridPos": {"h": 8, "w": 8, "x": 8, "y": 8}, "datasource": {"type": "prometheus", "uid": "prometheus"}, "fieldConfig": {"defaults": {"unit": "s"}}, "targets": [{"expr": "background_queue_oldest_age_seconds{environment=\"$environment\",service=\"$service\"}", "legendFormat": "{{queue}}"}]},
+    {"id": 6, "title": "Outbox unpublished", "type": "timeseries", "gridPos": {"h": 8, "w": 4, "x": 16, "y": 8}, "datasource": {"type": "prometheus", "uid": "prometheus"}, "targets": [{"expr": "outbox_unpublished_total{environment=\"$environment\",service=\"$service\"}", "legendFormat": "events"}]},
+    {"id": 7, "title": "RabbitMQ DLQ", "type": "timeseries", "gridPos": {"h": 8, "w": 4, "x": 20, "y": 8}, "datasource": {"type": "prometheus", "uid": "prometheus"}, "targets": [{"expr": "rabbitmq_queue_messages_ready{environment=\"$environment\",queue=\"deepscout.dead_letter\"}", "legendFormat": "ready"}]}
+  ],
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "tags": ["deepscout", "worker", "slo"],
+  "templating": {"list": [
+    {"name": "environment", "label": "Environment", "type": "query", "datasource": {"type": "prometheus", "uid": "prometheus"}, "query": "label_values(background_jobs_total, environment)", "refresh": 1},
+    {"name": "service", "label": "Service", "type": "query", "datasource": {"type": "prometheus", "uid": "prometheus"}, "query": "label_values(background_jobs_total{environment=\"$environment\"}, service)", "refresh": 1},
+    {"name": "job_type", "label": "Job type", "type": "custom", "query": "interview.finish,recording.process", "current": {"text": "interview.finish", "value": "interview.finish"}}
+  ]},
+  "time": {"from": "now-6h", "to": "now"},
+  "timezone": "browser",
+  "title": "DeepScout / Worker",
+  "uid": "deepscout-worker",
+  "version": 1
+}

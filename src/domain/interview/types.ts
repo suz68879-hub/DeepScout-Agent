@@ -34,7 +34,7 @@ export interface StartResponse {
 
 // POST /api/interview/finish
 export interface FinishResponse {
+  job_id: string;
   session_id: string;
-  report_id: string;
-  status: string;
+  status: 'pending';
 }

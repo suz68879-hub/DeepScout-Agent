@@ -23,6 +23,8 @@ from services.rtc_service import (
     call_voice_chat_openapi,
     get_scenes_payload,
 )
+from services.distributed_lock import LockBusy, LockLost
+from services.redis_client import SharedStateUnavailable
 from services.storage import storage
 
 logger = logging.getLogger(__name__)
@@ -64,6 +66,22 @@ async def proxy(
         )
     except RTCConfigurationError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except LockBusy:
+        raise HTTPException(
+            status_code=409,
+            detail="RTC session is busy; retry the request",
+            headers={"Retry-After": "2"},
+        ) from None
+    except LockLost:
+        raise HTTPException(
+            status_code=409,
+            detail="RTC session lock was lost; retry the request",
+            headers={"Retry-After": "1"},
+        ) from None
+    except SharedStateUnavailable:
+        raise HTTPException(status_code=503, detail="shared state unavailable") from None
+    except LookupError:
+        raise HTTPException(status_code=404, detail="interview session not found") from None
 
 
 @router.post("/api/chat_callback")
@@ -118,7 +136,12 @@ async def chat_callback(request: Request, rtc_callback_id: str | None = None):
             "messages": [{"role": "assistant", "content": full}],
             "pending_user_text": "",
         }, as_node="interviewer")
-        schedule_cold_path(session["id"])
+        latest_state = dict((await graph.aget_state(config)).values or {})
+        await schedule_cold_path(
+            session["id"],
+            session["user_id"],
+            len(latest_state.get("messages", [])),
+        )
         yield "data: [DONE]\n\n"
 
     return StreamingResponse(

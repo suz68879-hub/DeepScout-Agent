@@ -1,0 +1,99 @@
+groups:
+  - name: deepscout-slo-alerts
+    rules:
+      - alert: ApiAvailabilityFastBurn
+        expr: deepscout:http_availability:burn5m > 14.4 and on (environment, service) deepscout:http_availability:burn1h > 14.4 and on (environment, service) deepscout:http_requests:increase5m >= 100
+        for: 2m
+        labels: {severity: critical, owner: backend-oncall}
+        annotations:
+          summary: API availability error budget is burning rapidly
+          dashboard_url: /d/deepscout-api
+          runbook_url: /runbooks/observability-pipeline
+      - alert: ApiLatencyHigh
+        expr: deepscout:http_duration:p95_10m > 0.5 and on (environment, service) deepscout:http_requests:increase5m >= 100
+        for: 10m
+        labels: {severity: warning, owner: backend-oncall}
+        annotations:
+          summary: API p95 latency exceeds the 500ms objective
+          dashboard_url: /d/deepscout-api
+          runbook_url: /runbooks/observability-pipeline
+      - alert: FirstTokenLatencyHigh
+        expr: deepscout:first_token:p95_10m > 2
+        for: 10m
+        labels: {severity: warning, owner: ai-oncall}
+        annotations:
+          summary: Realtime first token p95 exceeds two seconds
+          dashboard_url: /d/deepscout-api
+          runbook_url: /runbooks/external-provider
+      - alert: BackgroundJobSuccessLow
+        expr: deepscout:job_success:ratio30m < 0.99 and on (environment, service, job_type) sum by (environment, service, job_type) (increase(background_jobs_total[30m])) >= 20
+        for: 10m
+        labels: {severity: warning, owner: worker-oncall}
+        annotations:
+          summary: Background job success ratio is below 99 percent
+          dashboard_url: /d/deepscout-worker
+          runbook_url: /runbooks/queue-backlog
+      - alert: RecordingJobLatencyHigh
+        expr: deepscout:job_duration:p95_30m{job_type="recording.process"} > 1200
+        for: 10m
+        labels: {severity: warning, owner: worker-oncall}
+        annotations:
+          summary: Recording job p95 duration exceeds twenty minutes
+          dashboard_url: /d/deepscout-worker
+          runbook_url: /runbooks/queue-backlog
+      - alert: QueueBacklogAgeHigh
+        expr: background_queue_oldest_age_seconds{queue=~"cold|recording"} > 600
+        for: 10m
+        labels: {severity: warning, owner: worker-oncall}
+        annotations:
+          summary: Oldest pending background job exceeds ten minutes
+          dashboard_url: /d/deepscout-worker
+          runbook_url: /runbooks/queue-backlog
+      - alert: DeadLetterQueueNotEmpty
+        expr: rabbitmq_queue_messages_ready{queue="deepscout.dead_letter"} > 0
+        for: 5m
+        labels: {severity: critical, owner: worker-oncall}
+        annotations:
+          summary: RabbitMQ dead-letter queue contains messages
+          dashboard_url: /d/deepscout-worker
+          runbook_url: /runbooks/queue-backlog
+      - alert: OutboxPublicationDelayed
+        expr: outbox_oldest_age_seconds > 10
+        for: 10m
+        labels: {severity: warning, owner: worker-oncall}
+        annotations:
+          summary: Oldest unpublished Outbox event exceeds ten seconds
+          dashboard_url: /d/deepscout-worker
+          runbook_url: /runbooks/queue-backlog
+      - alert: DatabasePoolSaturation
+        expr: db_pool_capacity > 0 and (db_pool_in_use / db_pool_capacity) > 0.9
+        for: 10m
+        labels: {severity: warning, owner: database-oncall}
+        annotations:
+          summary: PostgreSQL pool usage exceeds ninety percent
+          dashboard_url: /d/deepscout-dependencies
+          runbook_url: /runbooks/database-incident
+      - alert: RedisErrorRateHigh
+        expr: sum by (environment, service) (rate(redis_operation_errors_total[5m])) > 1
+        for: 10m
+        labels: {severity: warning, owner: backend-oncall}
+        annotations:
+          summary: Redis error rate is elevated
+          dashboard_url: /d/deepscout-dependencies
+          runbook_url: /runbooks/redis-incident
+      - alert: ExternalProviderErrorRateHigh
+        expr: deepscout:external_errors:ratio10m > 0.05 and on (environment, service, provider) sum by (environment, service, provider) (increase(external_request_duration_seconds_count[10m])) >= 20
+        for: 10m
+        labels: {severity: warning, owner: ai-oncall}
+        annotations:
+          summary: External provider error ratio exceeds five percent
+          dashboard_url: /d/deepscout-dependencies
+          runbook_url: /runbooks/external-provider
+      - alert: TelemetryExportDrops
+        expr: sum(rate(otelcol_exporter_send_failed_spans_total[5m])) + sum(rate(otelcol_exporter_send_failed_metric_points_total[5m])) + sum(rate(otelcol_exporter_send_failed_log_records_total[5m])) > 0
+        for: 5m
+        labels: {severity: warning, owner: sre-oncall}
+        annotations:
+          summary: OpenTelemetry Collector is dropping export data
+          dashboard_url: /d/deepscout-dependencies
+          runbook_url: /runbooks/observability-pipeline

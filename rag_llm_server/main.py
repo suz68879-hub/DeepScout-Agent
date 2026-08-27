@@ -5,14 +5,17 @@ from contextlib import asynccontextmanager
 import uvicorn
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 from agents.graph import close_graph, init_graph
 from agents.prompts.registry import registry
 from api import analytics as analytics_api
 from api import auth as auth_api
 from api import debug as debug_api
+from api import health as health_api
 from api import interview as interview_api
+from api import jobs as jobs_api
 from api import recording as recording_api
 from api import reports as reports_api
 from api import resume as resume_api
@@ -21,8 +24,14 @@ from config import settings
 from db import close_database, init_database
 from logging_config import configure_logging
 from middleware.request_context import RequestContextMiddleware
-from services.interview_service import shutdown_cold_tasks
-from services.rtc_service import clear_rtc_locks
+from middleware.idempotency import IdempotencyKeyMiddleware
+from observability.telemetry import (
+    TelemetryConfig,
+    initialize_telemetry,
+    shutdown_telemetry,
+)
+from observability.metrics import is_internal_metrics_client, service_metrics
+from services.redis_client import close_redis, init_redis
 from services.storage import close_storage, init_storage
 
 logger = logging.getLogger(__name__)
@@ -30,8 +39,11 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    await init_database()
+    health_api.mark_startup_incomplete()
+    initialize_telemetry(TelemetryConfig.from_environment(settings.APP_ENV))
     try:
+        await init_database()
+        await init_redis()
         await init_storage()
         if not settings.RTC_CALLBACK_SECRET:
             raise RuntimeError("RTC_CALLBACK_SECRET is required")
@@ -47,25 +59,20 @@ async def lifespan(_app: FastAPI):
         if registry.errors:
             logger.warning("Prompt loading warnings: %s", registry.errors)
 
-        try:
-            from services.recording_service import resume_pending
-            from services.storage import get_tos_store
-
-            if get_tos_store() is not None:
-                resumed = await resume_pending()
-                if resumed:
-                    logger.info("Resumed %s pending recording tasks", resumed)
-            else:
-                logger.info("Recording recovery disabled because TOS is not configured")
-        except Exception as exc:
-            logger.error("Recording recovery scan failed error_type=%s", type(exc).__name__)
+        health_api.mark_startup_complete(prompts_ready=not registry.errors)
         yield
     finally:
-        await shutdown_cold_tasks()
-        clear_rtc_locks()
+        health_api.mark_startup_incomplete()
         await close_graph()
+        await close_redis()
         await close_storage()
         await close_database()
+        flushed = await shutdown_telemetry(timeout_seconds=5)
+        if not flushed:
+            logger.warning(
+                "Telemetry shutdown exceeded its time limit",
+                extra={"event": "telemetry_shutdown_timeout"},
+            )
 
 
 async def unhandled_exception_handler(request: Request, exc: Exception):
@@ -91,6 +98,7 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    application.add_middleware(IdempotencyKeyMiddleware)
 
     @application.middleware("http")
     async def enforce_browser_origin(request: Request, call_next):
@@ -110,9 +118,22 @@ def create_app() -> FastAPI:
     application.add_middleware(RequestContextMiddleware)
 
     application.add_exception_handler(Exception, unhandled_exception_handler)
+
+    @application.get("/metrics", include_in_schema=False)
+    async def metrics_endpoint(request: Request):
+        client_host = request.client.host if request.client else None
+        if not is_internal_metrics_client(client_host):
+            return JSONResponse(status_code=403, content={"detail": "forbidden"})
+        return Response(
+            generate_latest(service_metrics.registry),
+            media_type=CONTENT_TYPE_LATEST,
+        )
+
     application.include_router(auth_api.router)
+    application.include_router(health_api.router)
     application.include_router(resume_api.router)
     application.include_router(interview_api.router)
+    application.include_router(jobs_api.router)
     application.include_router(reports_api.router)
     application.include_router(analytics_api.router)
     application.include_router(recording_api.router)

@@ -50,6 +50,7 @@ CREATE TABLE IF NOT EXISTS interview_session (
   rtc_task_id TEXT NOT NULL UNIQUE,
   rtc_callback_id TEXT NOT NULL UNIQUE,
   rtc_status TEXT NOT NULL DEFAULT 'created',
+  rtc_fencing_token INTEGER NOT NULL DEFAULT 0,
   version INTEGER NOT NULL DEFAULT 1
 );
 CREATE TABLE IF NOT EXISTS message (
@@ -77,6 +78,7 @@ CREATE TABLE IF NOT EXISTS recording (
   user_id TEXT NOT NULL REFERENCES app_user(id),
   filename TEXT,
   ext TEXT,
+  position TEXT,
   tos_key TEXT,
   size_bytes INTEGER,
   status TEXT,
@@ -96,7 +98,7 @@ class SqliteStorage(BaseStorage):
     RESUME_COLS = {"content", "structured_json", "source", "status"}
     SESSION_COLS = {"resume_id", "position", "stage", "status", "ended_at", "rtc_status"}
     RECORDING_COLS = {
-        "filename", "ext", "tos_key", "size_bytes", "status", "asr_task_id",
+        "filename", "ext", "position", "tos_key", "size_bytes", "status", "asr_task_id",
         "transcript_json", "error", "report_id", "finished_at",
     }
 
@@ -140,6 +142,10 @@ class SqliteStorage(BaseStorage):
             await self._add_column(
                 "interview_session", "version", "INTEGER NOT NULL DEFAULT 1",
             )
+            await self._add_column(
+                "interview_session", "rtc_fencing_token", "INTEGER NOT NULL DEFAULT 0",
+            )
+            await self._add_column("recording", "position", "TEXT")
 
             session_rows = await (
                 await conn.execute(
@@ -310,12 +316,21 @@ class SqliteStorage(BaseStorage):
         await self._c().commit()
 
     async def auth_session_get_user(self, token_hash: str) -> dict | None:
+        session = await self.auth_session_get(token_hash)
+        return session["user"] if session else None
+
+    async def auth_session_get(self, token_hash: str) -> dict | None:
         row = await (await self._c().execute(
-            "SELECT u.* FROM auth_session s JOIN app_user u ON u.id = s.user_id "
+            "SELECT u.*, s.expires_at AS session_expires_at "
+            "FROM auth_session s JOIN app_user u ON u.id = s.user_id "
             "WHERE s.token_hash = ? AND s.revoked_at IS NULL AND s.expires_at > ?",
             (token_hash, utc_now()),
         )).fetchone()
-        return dict(row) if row else None
+        if row is None:
+            return None
+        user = dict(row)
+        expires_at = user.pop("session_expires_at")
+        return {"user": user, "expires_at": expires_at}
 
     async def auth_session_revoke(self, token_hash: str) -> None:
         await self._c().execute(
@@ -402,13 +417,16 @@ class SqliteStorage(BaseStorage):
         row.setdefault("rtc_task_id", task_id)
         row.setdefault("rtc_callback_id", callback_id)
         row.setdefault("rtc_status", "created")
+        row.setdefault("rtc_fencing_token", 0)
         row.setdefault("version", 1)
         row["user_id"] = user_id
         await self._c().execute(
             "INSERT INTO interview_session (id, user_id, resume_id, position, stage, status, "
-            "started_at, ended_at, rtc_room_id, rtc_user_id, rtc_task_id, rtc_callback_id, rtc_status, version) "
+            "started_at, ended_at, rtc_room_id, rtc_user_id, rtc_task_id, rtc_callback_id, "
+            "rtc_status, rtc_fencing_token, version) "
             "VALUES (:id, :user_id, :resume_id, :position, :stage, :status, :started_at, :ended_at, "
-            ":rtc_room_id, :rtc_user_id, :rtc_task_id, :rtc_callback_id, :rtc_status, :version)", row,
+            ":rtc_room_id, :rtc_user_id, :rtc_task_id, :rtc_callback_id, :rtc_status, "
+            ":rtc_fencing_token, :version)", row,
         )
         await self._c().commit()
         return row
@@ -458,6 +476,36 @@ class SqliteStorage(BaseStorage):
         await self._c().commit()
         return await self.session_get(user_id, session_id)
 
+    async def session_claim_rtc_fence(
+        self, user_id: str, session_id: str, fencing_token: int
+    ) -> dict | None:
+        cursor = await self._c().execute(
+            "UPDATE interview_session SET rtc_fencing_token = ? "
+            "WHERE id = ? AND user_id = ? AND rtc_fencing_token < ?",
+            (fencing_token, session_id, user_id, fencing_token),
+        )
+        if cursor.rowcount == 0:
+            if await self.session_get(user_id, session_id):
+                raise StorageVersionConflictError("RTC fencing token conflict")
+            return None
+        await self._c().commit()
+        return await self.session_get(user_id, session_id)
+
+    async def session_update_rtc_status(
+        self, user_id: str, session_id: str, rtc_status: str, fencing_token: int
+    ) -> dict | None:
+        cursor = await self._c().execute(
+            "UPDATE interview_session SET rtc_status = ? "
+            "WHERE id = ? AND user_id = ? AND rtc_fencing_token = ?",
+            (rtc_status, session_id, user_id, fencing_token),
+        )
+        if cursor.rowcount == 0:
+            if await self.session_get(user_id, session_id):
+                raise StorageVersionConflictError("RTC fencing token conflict")
+            return None
+        await self._c().commit()
+        return await self.session_get(user_id, session_id)
+
     async def session_list_running(self, user_id: str) -> list[dict]:
         rows = await (await self._c().execute(
             "SELECT * FROM interview_session WHERE user_id = ? AND status = 'running' "
@@ -499,7 +547,7 @@ class SqliteStorage(BaseStorage):
             raise ValueError("report does not belong to user")
         row.setdefault("id", str(uuid.uuid4()))
         for key in (
-            "filename", "ext", "tos_key", "size_bytes", "asr_task_id", "transcript_json",
+            "filename", "ext", "position", "tos_key", "size_bytes", "asr_task_id", "transcript_json",
             "error", "report_id",
         ):
             row.setdefault(key, None)
@@ -508,9 +556,9 @@ class SqliteStorage(BaseStorage):
         row.setdefault("finished_at", None)
         row["user_id"] = user_id
         await self._c().execute(
-            "INSERT INTO recording (id, user_id, filename, ext, tos_key, size_bytes, status, "
+            "INSERT INTO recording (id, user_id, filename, ext, position, tos_key, size_bytes, status, "
             "asr_task_id, transcript_json, error, report_id, created_at, finished_at) VALUES "
-            "(:id, :user_id, :filename, :ext, :tos_key, :size_bytes, :status, :asr_task_id, "
+            "(:id, :user_id, :filename, :ext, :position, :tos_key, :size_bytes, :status, :asr_task_id, "
             ":transcript_json, :error, :report_id, :created_at, :finished_at)", row,
         )
         await self._c().commit()

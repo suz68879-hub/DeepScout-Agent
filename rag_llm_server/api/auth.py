@@ -1,7 +1,4 @@
 """Username/password authentication backed by opaque HttpOnly sessions."""
-import time
-from collections import defaultdict, deque
-
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 
@@ -13,19 +10,16 @@ from services.auth_service import (
     token_digest,
     verify_password_async,
 )
+from services.rate_limit import RateLimitDecision, RateLimiter
+from services.redis_client import SharedStateUnavailable, get_redis
+from services.session_cache import SessionCache
 from services.storage import storage
 from services.storage.base import StorageConflictError
 
 COOKIE_NAME = "interview_session"
 COOKIE_MAX_AGE = 7 * 24 * 60 * 60
-LOGIN_WINDOW_SECONDS = 15 * 60
-LOGIN_MAX_FAILURES = 5
-REGISTER_WINDOW_SECONDS = 60 * 60
-REGISTER_MAX_ATTEMPTS = 10
-
 router = APIRouter(prefix="/api/auth", tags=["auth"])
-_login_failures: dict[str, deque[float]] = defaultdict(deque)
-_register_attempts: dict[str, deque[float]] = defaultdict(deque)
+_rate_limiter: RateLimiter | None = None
 
 
 class Credentials(BaseModel):
@@ -42,20 +36,32 @@ def _client_ip(request: Request) -> str:
     return request.client.host if request.client else "unknown"
 
 
-def _is_limited(bucket: deque[float], window: int, maximum: int) -> bool:
-    now = time.monotonic()
-    while bucket and now - bucket[0] >= window:
-        bucket.popleft()
-    return len(bucket) >= maximum
-
-
-def reset_rate_limits() -> None:
-    _login_failures.clear()
-    _register_attempts.clear()
-
-
 def _public_user(user: dict) -> dict[str, str]:
     return {"id": user["id"], "username": user["username"]}
+
+
+def get_session_cache() -> SessionCache:
+    return SessionCache(get_redis(), settings.APP_ENV)
+
+
+def get_rate_limiter() -> RateLimiter:
+    global _rate_limiter
+    client = get_redis()
+    if _rate_limiter is None or not _rate_limiter.matches(client, settings.APP_ENV):
+        _rate_limiter = RateLimiter(client, settings.APP_ENV)
+    return _rate_limiter
+
+
+def _shared_state_unavailable() -> HTTPException:
+    return HTTPException(status_code=503, detail="shared state unavailable")
+
+
+def _rate_limit_error(decision: RateLimitDecision, detail: str) -> HTTPException:
+    return HTTPException(
+        status_code=429,
+        detail=detail,
+        headers={"Retry-After": str(decision.retry_after)},
+    )
 
 
 def _set_session_cookie(response: Response, token: str) -> None:
@@ -73,6 +79,15 @@ def _set_session_cookie(response: Response, token: str) -> None:
 async def _issue_session(response: Response, user: dict) -> dict[str, str]:
     token, digest, expires_at = create_session_token()
     await storage.auth_session_create(user["id"], digest, expires_at)
+    if settings.AUTH_SESSION_CACHE_ENABLED:
+        try:
+            await get_session_cache().write(
+                digest,
+                {"user": user, "expires_at": expires_at},
+            )
+        except SharedStateUnavailable:
+            await storage.auth_session_revoke(digest)
+            raise _shared_state_unavailable() from None
     _set_session_cookie(response, token)
     return _public_user(user)
 
@@ -81,7 +96,17 @@ async def get_current_user(request: Request) -> dict:
     token = request.cookies.get(COOKIE_NAME)
     if not token:
         raise HTTPException(status_code=401, detail="authentication required")
-    user = await storage.auth_session_get_user(token_digest(token))
+    digest = token_digest(token)
+    if settings.AUTH_SESSION_CACHE_ENABLED:
+        try:
+            user = await get_session_cache().resolve(
+                digest,
+                lambda: storage.auth_session_get(digest),
+            )
+        except SharedStateUnavailable:
+            raise _shared_state_unavailable() from None
+    else:
+        user = await storage.auth_session_get_user(digest)
     if not user:
         raise HTTPException(status_code=401, detail="authentication required")
     return user
@@ -89,10 +114,12 @@ async def get_current_user(request: Request) -> dict:
 
 @router.post("/register", status_code=201)
 async def register(body: Credentials, request: Request, response: Response):
-    bucket = _register_attempts[_client_ip(request)]
-    if _is_limited(bucket, REGISTER_WINDOW_SECONDS, REGISTER_MAX_ATTEMPTS):
-        raise HTTPException(status_code=429, detail="too many registration attempts")
-    bucket.append(time.monotonic())
+    try:
+        decision = await get_rate_limiter().consume_register(_client_ip(request))
+    except SharedStateUnavailable:
+        raise _shared_state_unavailable() from None
+    if not decision.allowed:
+        raise _rate_limit_error(decision, "too many registration attempts")
     try:
         username = normalize_username(body.username)
         password_hash = await hash_password_async(body.password)
@@ -107,23 +134,27 @@ async def register(body: Credentials, request: Request, response: Response):
 @router.post("/login")
 async def login(body: LoginCredentials, request: Request, response: Response):
     raw_username = body.username.lower()
-    key = f"{_client_ip(request)}:{raw_username[:128]}"
-    failures = _login_failures[key]
-    if _is_limited(failures, LOGIN_WINDOW_SECONDS, LOGIN_MAX_FAILURES):
-        raise HTTPException(status_code=429, detail="too many login attempts")
+    client_ip = _client_ip(request)
+    try:
+        decision = await get_rate_limiter().consume_login(client_ip, raw_username)
+    except SharedStateUnavailable:
+        raise _shared_state_unavailable() from None
+    if not decision.allowed:
+        raise _rate_limit_error(decision, "too many login attempts")
     try:
         username = normalize_username(body.username)
     except ValueError:
-        failures.append(time.monotonic())
         raise HTTPException(status_code=401, detail="invalid username or password") from None
     user = await storage.user_get_by_username(username)
     password_valid = 10 <= len(body.password) <= 128
     if not user or not password_valid or not await verify_password_async(
         body.password, user["password_hash"],
     ):
-        failures.append(time.monotonic())
         raise HTTPException(status_code=401, detail="invalid username or password")
-    failures.clear()
+    try:
+        await get_rate_limiter().clear_login(client_ip, raw_username)
+    except SharedStateUnavailable:
+        raise _shared_state_unavailable() from None
     return await _issue_session(response, user)
 
 
@@ -136,7 +167,13 @@ async def me(user: dict = Depends(get_current_user)):
 async def logout(request: Request, user: dict = Depends(get_current_user)):
     del user
     token = request.cookies[COOKIE_NAME]
-    await storage.auth_session_revoke(token_digest(token))
+    digest = token_digest(token)
+    if settings.AUTH_SESSION_CACHE_ENABLED:
+        try:
+            await get_session_cache().delete(digest)
+        except SharedStateUnavailable:
+            raise _shared_state_unavailable() from None
+    await storage.auth_session_revoke(digest)
     response = Response(status_code=204)
     response.delete_cookie(
         COOKIE_NAME,

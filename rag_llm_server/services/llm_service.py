@@ -1,17 +1,22 @@
 import logging
-import os
 from volcenginesdkarkruntime import Ark 
 from config import settings
+from observability.external_span import external_call
 
 logger = logging.getLogger(__name__)
 
 class LLMService:
     def __init__(self):
-        api_key = settings.ARK_API_KEY 
+        api_key = settings.ARK_API_KEY
+        if not api_key:
+            # 无凭证时降级为 None，避免 import 期构造崩溃；调用侧已有 client 守卫。
+            logger.warning("LLM disabled because ARK_API_KEY is missing")
+            self.client = None
+            return
         self.client = Ark(
-            base_url="https://ark.cn-beijing.volces.com/api/v3",    
-            api_key=api_key, 
-            timeout=1800, 
+            base_url="https://ark.cn-beijing.volces.com/api/v3",
+            api_key=api_key,
+            timeout=1800,
 
         )
 
@@ -68,16 +73,21 @@ class LLMService:
         try:
             logger.info("Starting LLM stream")
             
-            stream = self.client.chat.completions.create(
+            with external_call(
+                "ark",
+                "chat_stream",
                 model=settings.ARK_ENDPOINT_ID,
-                messages=messages,
-                temperature=0.3, # 降低随机性，确保回答更严谨地贴合 RAG
-                stream=True,
-                stream_options={"include_usage": True},
-            )
+            ):
+                stream = self.client.chat.completions.create(
+                    model=settings.ARK_ENDPOINT_ID,
+                    messages=messages,
+                    temperature=0.3, # 降低随机性，确保回答更严谨地贴合 RAG
+                    stream=True,
+                    stream_options={"include_usage": True},
+                )
 
-            for chunk in stream:
-                yield chunk
+                for chunk in stream:
+                    yield chunk
 
         except Exception as exc:
             logger.error("LLM stream failed error_type=%s", type(exc).__name__)

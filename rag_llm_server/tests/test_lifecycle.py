@@ -1,5 +1,4 @@
-"""应用生命周期：graph 单例与进程内冷任务均由 FastAPI lifespan 管理。"""
-import asyncio
+"""应用生命周期：graph 单例与 checkpointer 连接由 FastAPI lifespan 管理。"""
 
 
 async def test_graph_init_is_idempotent(monkeypatch):
@@ -63,22 +62,3 @@ async def test_graph_close_releases_postgres_checkpointer_pool(monkeypatch):
 
     assert pool.closed is True
     assert graph_module._checkpoint_pool is None
-
-
-async def test_shutdown_cold_tasks_cancels_and_clears_pending_tasks(monkeypatch):
-    import services.interview_service as interview_service
-
-    started = asyncio.Event()
-
-    async def wait_forever():
-        started.set()
-        await asyncio.Event().wait()
-
-    task = asyncio.create_task(wait_forever())
-    await started.wait()
-    monkeypatch.setattr(interview_service, "_cold_tasks", {"session-1": task})
-
-    await interview_service.shutdown_cold_tasks()
-
-    assert task.cancelled()
-    assert interview_service._cold_tasks == {}

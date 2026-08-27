@@ -16,9 +16,9 @@
 |---|---|---|---|---|
 | Phase 0 | [恢复绿色基线](phase-0-恢复绿色基线.md) | 全绿测试、Request ID、JSON 日志、GitHub 基线 | 无 | 已完成 |
 | Phase 1 | [PostgreSQL 与数据迁移](phase-1-PostgreSQL与数据迁移.md) | PostgreSQL Repository、Alembic、迁移工具 | Phase 0 | 已完成 |
-| Phase 2 | [Redis 与无状态 API](phase-2-Redis与无状态API.md) | Redis 会话、限流、锁、幂等 | Phase 1 | 未开始 |
-| Phase 3 | [持久化任务队列与 Outbox](phase-3-持久化任务队列与Outbox.md) | Celery、RabbitMQ、任务状态机、Outbox | Phase 2 | 未开始 |
-| Phase 4 | [可观测性体系](phase-4-可观测性体系.md) | OTel、Prometheus、Tempo、Loki、Grafana | Phase 1；部分任务依赖 2/3 | 未开始 |
+| Phase 2 | [Redis 与无状态 API](phase-2-Redis与无状态API.md) | Redis 会话、限流、锁、幂等 | Phase 1 | 已完成 |
+| Phase 3 | [持久化任务队列与 Outbox](phase-3-持久化任务队列与Outbox.md) | Celery、RabbitMQ、任务状态机、Outbox | Phase 2 | 已完成 |
+| Phase 4 | [可观测性体系](phase-4-可观测性体系.md) | OTel、Prometheus、Tempo、Loki、Grafana | Phase 1；部分任务依赖 2/3 | 进行中 |
 | Phase 5 | [火山引擎部署与发布](phase-5-火山引擎部署与发布.md) | ECS 过渡部署、VKE、Helm、Argo Rollouts | ECS：1/2/3；VKE：2/3/4 | 未开始 |
 | Phase 6 | [供应链安全与灾备](phase-6-供应链安全与灾备.md) | 安全门禁、SBOM、PITR、恢复演练 | 安全部分：0；灾备：1/3/5 | 未开始 |
 

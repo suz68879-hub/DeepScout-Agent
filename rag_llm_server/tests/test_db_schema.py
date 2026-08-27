@@ -14,6 +14,8 @@ EXPECTED_TABLES = {
     "message",
     "interview_report",
     "recording",
+    "background_job",
+    "outbox_event",
 }
 
 
@@ -25,6 +27,7 @@ def test_metadata_contains_business_tables_and_postgres_types():
     assert isinstance(Base.metadata.tables["resume"].c.structured_json.type, JSONB)
     assert isinstance(Base.metadata.tables["interview_report"].c.scores_json.type, JSONB)
     assert isinstance(Base.metadata.tables["recording"].c.transcript_json.type, JSONB)
+    assert "position" in Base.metadata.tables["recording"].c
 
     for table in Base.metadata.tables.values():
         for column in table.c:
@@ -52,6 +55,8 @@ def test_schema_has_required_uniqueness_and_owner_indexes():
     } <= session_unique_names
     assert "version" in session.c
     assert session.c.version.nullable is False
+    assert "rtc_fencing_token" in session.c
+    assert session.c.rtc_fencing_token.nullable is False
 
     message = metadata.tables["message"]
     message_unique_columns = {

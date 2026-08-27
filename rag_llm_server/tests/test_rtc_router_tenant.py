@@ -15,8 +15,9 @@ class FakeStorage:
 
 
 class FakeRequest:
-    def __init__(self, body):
+    def __init__(self, body, **query_params):
         self.body = body
+        self.query_params = query_params
 
     async def json(self):
         return self.body
@@ -31,6 +32,22 @@ async def test_get_scenes_rejects_session_owned_by_another_user(monkeypatch):
     monkeypatch.setattr(rtc_api, "storage", FakeStorage())
     with pytest.raises(HTTPException) as exc_info:
         await rtc_api.get_scenes(rtc_api.SceneRequest(SessionId="session-1"), {"id": "bob"})
+    assert exc_info.value.status_code == 404
+
+
+async def test_proxy_rejects_other_tenant_before_competing_for_lock(monkeypatch):
+    monkeypatch.setattr(rtc_api, "storage", FakeStorage())
+
+    async def forbidden(*_args, **_kwargs):
+        raise AssertionError("cross-tenant request must not reach RTC lock")
+
+    monkeypatch.setattr(rtc_api, "call_voice_chat_openapi", forbidden)
+    with pytest.raises(HTTPException) as exc_info:
+        await rtc_api.proxy(
+            FakeRequest({}, Action="StartVoiceChat"),
+            rtc_api.ProxyRequest(SessionId="session-1"),
+            {"id": "bob"},
+        )
     assert exc_info.value.status_code == 404
 
 
