@@ -120,6 +120,7 @@
 
 ### P4-T09 编写故障 Runbook
 
+- **实施状态**：实现完成、待部署后演练；5 份 Runbook 已覆盖 12 条告警并通过章节、安全禁令和链接校验，非作者预发演练需在可用观测栈上留档。
 - **依赖/并行**：P4-T08。**规模/角色**：M，SRE/后端。
 - **预计文件**：`deploy/runbooks/database-incident.md`、`redis-incident.md`、`queue-backlog.md`、`external-provider.md`、`observability-pipeline.md`。
 - **契约与步骤**：每份包含影响、检测、权限、仪表盘、诊断顺序、安全缓解、升级和恢复确认；命令使用只读检查优先；生产变更步骤标记审批点。
