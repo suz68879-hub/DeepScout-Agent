@@ -7,11 +7,16 @@ logger = logging.getLogger(__name__)
 
 class LLMService:
     def __init__(self):
-        api_key = settings.ARK_API_KEY 
+        api_key = settings.ARK_API_KEY
+        if not api_key:
+            # 无凭证时降级为 None，避免 import 期构造崩溃；调用侧已有 client 守卫。
+            logger.warning("LLM disabled because ARK_API_KEY is missing")
+            self.client = None
+            return
         self.client = Ark(
-            base_url="https://ark.cn-beijing.volces.com/api/v3",    
-            api_key=api_key, 
-            timeout=1800, 
+            base_url="https://ark.cn-beijing.volces.com/api/v3",
+            api_key=api_key,
+            timeout=1800,
 
         )
 
