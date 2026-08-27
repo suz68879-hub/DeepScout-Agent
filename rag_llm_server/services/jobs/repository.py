@@ -74,19 +74,42 @@ class JobRepository:
     async def refresh_queue_depth_metrics(self) -> None:
         rows = (
             await self._session.execute(
-                select(BackgroundJob.job_type, func.count(BackgroundJob.id))
+                select(
+                    BackgroundJob.job_type,
+                    func.count(BackgroundJob.id),
+                    func.min(BackgroundJob.created_at),
+                )
                 .where(BackgroundJob.status == JobStatus.PENDING.value)
                 .group_by(BackgroundJob.job_type)
             )
         ).all()
-        counts = {job_type: count for job_type, count in rows}
+        snapshots = {
+            job_type: (count, oldest_at)
+            for job_type, count, oldest_at in rows
+        }
+        observed_at = _now(None)
+        cold_count, cold_oldest = snapshots.get("interview.finish", (0, None))
+        recording_count, recording_oldest = snapshots.get(
+            "recording.process",
+            (0, None),
+        )
         service_metrics.set_queue_depth(
             "cold",
-            counts.get("interview.finish", 0),
+            cold_count,
+        )
+        service_metrics.set_queue_oldest_age(
+            "cold",
+            (observed_at - cold_oldest).total_seconds() if cold_oldest else 0,
         )
         service_metrics.set_queue_depth(
             "recording",
-            counts.get("recording.process", 0),
+            recording_count,
+        )
+        service_metrics.set_queue_oldest_age(
+            "recording",
+            (observed_at - recording_oldest).total_seconds()
+            if recording_oldest
+            else 0,
         )
 
     async def create(

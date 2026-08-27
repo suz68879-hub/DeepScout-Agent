@@ -110,14 +110,30 @@ class ServiceMetrics:
             ("queue",),
             registry=registry,
         )
+        self.queue_oldest_age = Gauge(
+            "background_queue_oldest_age_seconds",
+            "Age of the oldest persisted pending job.",
+            ("queue",),
+            registry=registry,
+        )
         self.outbox_unpublished = Gauge(
             "outbox_unpublished_total",
             "Unpublished outbox events.",
             registry=registry,
         )
+        self.outbox_oldest_age = Gauge(
+            "outbox_oldest_age_seconds",
+            "Age of the oldest unpublished outbox event.",
+            registry=registry,
+        )
         self.db_pool_in_use = Gauge(
             "db_pool_in_use",
             "Checked out database connections.",
+            registry=registry,
+        )
+        self.db_pool_capacity = Gauge(
+            "db_pool_capacity",
+            "Configured database pool size including overflow.",
             registry=registry,
         )
         self.redis_errors = Counter(
@@ -185,13 +201,22 @@ class ServiceMetrics:
     def set_queue_depth(self, queue: str, value: int) -> None:
         self.queue_depth.labels(_allowed(queue, _QUEUES)).set(max(0, value))
 
+    def set_queue_oldest_age(self, queue: str, value: float) -> None:
+        self.queue_oldest_age.labels(_allowed(queue, _QUEUES)).set(max(0.0, value))
+
     def set_outbox_unpublished(self, value: int) -> None:
         self.outbox_unpublished.set(max(0, value))
+
+    def set_outbox_oldest_age(self, value: float) -> None:
+        self.outbox_oldest_age.set(max(0.0, value))
 
     def set_db_pool_in_use(self, value: int) -> None:
         with self._db_pool_lock:
             self._db_pool_count = max(0, value)
             self.db_pool_in_use.set(self._db_pool_count)
+
+    def set_db_pool_capacity(self, value: int) -> None:
+        self.db_pool_capacity.set(max(0, value))
 
     def database_connection_checked_out(self) -> None:
         with self._db_pool_lock:

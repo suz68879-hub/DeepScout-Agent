@@ -17,8 +17,11 @@ def test_core_metrics_have_slo_buckets_and_fixed_labels():
     metrics.record_external("ark", "chat", "success", 0.8)
     metrics.record_job("interview.finish", "succeeded", 12.0)
     metrics.set_queue_depth("cold", 3)
+    metrics.set_queue_oldest_age("cold", 45)
     metrics.set_outbox_unpublished(2)
+    metrics.set_outbox_oldest_age(8)
     metrics.set_db_pool_in_use(4)
+    metrics.set_db_pool_capacity(10)
     metrics.record_redis_error("GET", "timeout")
 
     output = _render(metrics)
@@ -28,8 +31,11 @@ def test_core_metrics_have_slo_buckets_and_fixed_labels():
     assert 'external_request_duration_seconds_count{operation="chat",outcome="success",provider="ark"} 1.0' in output
     assert 'background_jobs_total{job_type="interview.finish",outcome="succeeded"} 1.0' in output
     assert 'background_queue_depth{queue="cold"} 3.0' in output
+    assert 'background_queue_oldest_age_seconds{queue="cold"} 45.0' in output
     assert "outbox_unpublished_total 2.0" in output
+    assert "outbox_oldest_age_seconds 8.0" in output
     assert "db_pool_in_use 4.0" in output
+    assert "db_pool_capacity 10.0" in output
     assert 'redis_operation_errors_total{error_type="timeout",operation="GET"} 1.0' in output
 
 

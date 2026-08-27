@@ -110,6 +110,7 @@
 
 ### P4-T08 定义 SLO 与告警
 
+- **实施状态**：已完成；SLO 基线、12 条 recording rule、12 条分级告警及 promtool 3.13.2 触发/恢复测试通过。
 - **依赖/并行**：P4-T07。**规模/角色**：M，SRE/业务负责人。
 - **预计文件**：`observability/prometheus/recording-rules.yaml`、`observability/prometheus/alerts.yaml`、`observability/tests/test_rules.yml`、`docs/enterprise-evolution/evidence/slo-baseline.md`。
 - **契约与步骤**：固化本阶段初始 SLO；可用性采用 5m/1h 多窗口 error budget burn；延迟连续 10 分钟、DLQ/队列年龄、outbox、连接池和遥测丢弃建立分级告警。

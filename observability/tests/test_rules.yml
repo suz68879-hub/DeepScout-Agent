@@ -1,0 +1,36 @@
+rule_files:
+  - ../prometheus/recording-rules.yaml
+  - ../prometheus/alerts.yaml
+
+evaluation_interval: 1m
+
+tests:
+  - interval: 1m
+    input_series:
+      - series: 'http_server_requests_total{environment="test",service="api",status_class="2xx"}'
+        values: '0+98x65'
+      - series: 'http_server_requests_total{environment="test",service="api",status_class="5xx"}'
+        values: '0+2x65'
+    alert_rule_test:
+      - eval_time: 65m
+        alertname: ApiAvailabilityFastBurn
+        exp_alerts:
+          - exp_labels:
+              environment: test
+              service: api
+              severity: critical
+              owner: backend-oncall
+            exp_annotations:
+              summary: API availability error budget is burning rapidly
+              dashboard_url: /d/deepscout-api
+              runbook_url: /runbooks/observability-pipeline
+  - interval: 1m
+    input_series:
+      - series: 'http_server_requests_total{environment="test",service="api",status_class="2xx"}'
+        values: '0+10x65'
+      - series: 'http_server_requests_total{environment="test",service="api",status_class="5xx"}'
+        values: '0+0x65'
+    alert_rule_test:
+      - eval_time: 65m
+        alertname: ApiAvailabilityFastBurn
+        exp_alerts: []

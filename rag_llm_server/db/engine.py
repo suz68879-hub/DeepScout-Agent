@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import (
 
 from config import Config, settings
 from observability.instrumentation import instrument_sqlalchemy
+from observability.metrics import service_metrics
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +63,9 @@ def build_database_runtime(config: Config) -> DatabaseRuntime:
         pool_recycle=config.DATABASE_POOL_RECYCLE,
     )
     instrument_sqlalchemy(engine)
+    service_metrics.set_db_pool_capacity(
+        config.DATABASE_POOL_SIZE + config.DATABASE_MAX_OVERFLOW
+    )
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     return DatabaseRuntime(engine, session_factory)
 

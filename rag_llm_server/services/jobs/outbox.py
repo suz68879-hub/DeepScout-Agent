@@ -105,14 +105,27 @@ class OutboxRepository:
         self._session = session
 
     async def refresh_unpublished_metric(self) -> None:
-        count = await self._session.scalar(
-            select(func.count(OutboxEvent.id)).where(
-                OutboxEvent.published_at.is_(None)
+        snapshot = (
+            await self._session.execute(
+                select(
+                    func.count(OutboxEvent.id),
+                    func.min(OutboxEvent.created_at),
+                ).where(
+                    OutboxEvent.published_at.is_(None)
+                )
             )
-        )
+        ).one()
+        count, oldest_at = snapshot
         locked_count = int(count or 0)
+        oldest_age = (
+            max(0.0, (_now(None) - oldest_at).total_seconds())
+            if oldest_at
+            else 0.0
+        )
         service_metrics.set_outbox_unpublished(locked_count)
+        service_metrics.set_outbox_oldest_age(oldest_age)
         service_metrics.set_queue_depth("outbox", locked_count)
+        service_metrics.set_queue_oldest_age("outbox", oldest_age)
 
     async def claim_due(
         self,
