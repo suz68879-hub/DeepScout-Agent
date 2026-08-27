@@ -6,6 +6,7 @@
 from langchain_openai import ChatOpenAI
 
 from config import ARK_BASE_URL, settings
+from observability.external_span import ExternalLLMCallbackHandler
 
 # agent-designs §0.4：temperature / top_p / max_tokens / timeout（stream 在调用层控制）
 # max_tokens / timeout 已按推理模型上调（原 512-2048 / 10-60s）：
@@ -38,6 +39,7 @@ def get_agent_llm(agent: str) -> ChatOpenAI:
         max_tokens=p["max_tokens"],
         timeout=p["timeout"],
         model_kwargs={"top_p": p["top_p"]},
+        callbacks=[ExternalLLMCallbackHandler(endpoint)],
         # 端点绑定思考类模型时关闭思考：实测思考不收敛会吃满 max_tokens
         # （LengthFinishReasonError），disabled 后结构化输出正常。
         # 若端点换为非思考模型且此参数报错，删除本行即可。
@@ -59,4 +61,5 @@ def get_vision_llm() -> ChatOpenAI:
         temperature=0.1,
         max_tokens=2048,
         timeout=30,
+        callbacks=[ExternalLLMCallbackHandler(settings.ARK_VISION_ENDPOINT_ID)],
     )

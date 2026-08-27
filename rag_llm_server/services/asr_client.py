@@ -9,6 +9,7 @@ import uuid
 import httpx
 
 from config import settings
+from observability.external_span import external_call
 
 ASR_BASE_URL = "https://openspeech.bytedance.com"
 SUBMIT_PATH = "/api/v3/auc/bigmodel/submit"
@@ -58,11 +59,25 @@ async def submit_asr(audio_url: str, ext: str, *, task_id: str | None = None) ->
             "show_utterances": True,
         },
     }
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        resp = await client.post(ASR_BASE_URL + SUBMIT_PATH, headers=_headers(task_id), json=body)
-    code = resp.headers.get("X-Api-Status-Code", "")
-    if code != STATUS_SUCCESS:
-        raise AsrError(code, resp.headers.get("X-Api-Message", "识别服务错误"))
+    with external_call(
+        "asr",
+        "submit",
+        model="bigmodel",
+        input_size=len(audio_url.encode("utf-8")),
+    ) as call:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(
+                ASR_BASE_URL + SUBMIT_PATH,
+                headers=_headers(task_id),
+                json=body,
+            )
+        code = resp.headers.get("X-Api-Status-Code", "")
+        if code != STATUS_SUCCESS:
+            raise AsrError(
+                code,
+                resp.headers.get("X-Api-Message", "识别服务错误"),
+            )
+        call.succeed(http_status=getattr(resp, "status_code", None))
     return task_id
 
 
@@ -70,14 +85,25 @@ async def query_asr(task_id: str) -> dict | None:
     """查询识别任务；完成返回应答 JSON，处理中返回 None，失败抛 AsrError。"""
     if not settings.ASR_FILE_API_KEY:
         raise ValueError("未配置 ASR_FILE_API_KEY，无法查询语音识别任务")
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        resp = await client.post(ASR_BASE_URL + QUERY_PATH, headers=_headers(task_id), json={})
-    code = resp.headers.get("X-Api-Status-Code", "")
-    if code == STATUS_SUCCESS:
-        return resp.json()
-    if code in (STATUS_PROCESSING, STATUS_QUEUED):
-        return None
-    raise AsrError(code, resp.headers.get("X-Api-Message", "识别服务错误"))
+    with external_call("asr", "query", model="bigmodel") as call:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(
+                ASR_BASE_URL + QUERY_PATH,
+                headers=_headers(task_id),
+                json={},
+            )
+        code = resp.headers.get("X-Api-Status-Code", "")
+        if code == STATUS_SUCCESS:
+            payload = resp.json()
+            call.succeed(http_status=getattr(resp, "status_code", None))
+            return payload
+        if code in (STATUS_PROCESSING, STATUS_QUEUED):
+            call.succeed(http_status=getattr(resp, "status_code", None))
+            return None
+        raise AsrError(
+            code,
+            resp.headers.get("X-Api-Message", "识别服务错误"),
+        )
 
 
 def parse_transcript(payload: dict) -> list[dict]:

@@ -1,7 +1,7 @@
 import logging
-import os
 from volcenginesdkarkruntime import Ark 
 from config import settings
+from observability.external_span import external_call
 
 logger = logging.getLogger(__name__)
 
@@ -68,16 +68,21 @@ class LLMService:
         try:
             logger.info("Starting LLM stream")
             
-            stream = self.client.chat.completions.create(
+            with external_call(
+                "ark",
+                "chat_stream",
                 model=settings.ARK_ENDPOINT_ID,
-                messages=messages,
-                temperature=0.3, # 降低随机性，确保回答更严谨地贴合 RAG
-                stream=True,
-                stream_options={"include_usage": True},
-            )
+            ):
+                stream = self.client.chat.completions.create(
+                    model=settings.ARK_ENDPOINT_ID,
+                    messages=messages,
+                    temperature=0.3, # 降低随机性，确保回答更严谨地贴合 RAG
+                    stream=True,
+                    stream_options={"include_usage": True},
+                )
 
-            for chunk in stream:
-                yield chunk
+                for chunk in stream:
+                    yield chunk
 
         except Exception as exc:
             logger.error("LLM stream failed error_type=%s", type(exc).__name__)

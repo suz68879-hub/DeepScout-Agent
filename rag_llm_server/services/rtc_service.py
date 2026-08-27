@@ -5,6 +5,7 @@ from typing import Any
 import httpx
 
 from config import settings
+from observability.external_span import external_call
 from services.distributed_lock import DistributedLock, LockLost, RedisLease
 from services.interview_service import _restore_state, build_welcome_message
 from services.redis_client import get_redis
@@ -153,14 +154,28 @@ async def _call_provider(
     })
     url = f"https://{host}?Action={action}&Version={version}"
     await lease.assert_owned()
-    async with httpx.AsyncClient() as client:
-        response = await client.post(
-            url,
-            headers=request_data["headers"],
-            json=request_body,
-            timeout=30.0,
-        )
-    return response.json()
+    with external_call(
+        "rtc",
+        action or "unknown",
+        model=version,
+    ) as call:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                url,
+                headers=request_data["headers"],
+                json=request_body,
+                timeout=30.0,
+            )
+        payload = response.json()
+        status_code = getattr(response, "status_code", None)
+        if payload.get("ResponseMetadata", {}).get("Error"):
+            call.fail(
+                "rate_limited" if status_code == 429 else "provider",
+                http_status=status_code,
+            )
+        else:
+            call.succeed(http_status=status_code)
+        return payload
 
 
 async def call_voice_chat_openapi(

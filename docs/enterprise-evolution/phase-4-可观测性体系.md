@@ -64,8 +64,9 @@
 
 ### P4-T04 为外部供应商建立脱敏 Span
 
+- **实施状态**：已完成；ARK 主调用链、旧流式客户端、ASR 与 RTC 已统一记录脱敏结果，并覆盖成功、超时、限流、取消与敏感样本测试。
 - **依赖/并行**：检查点 A。**规模/角色**：M，后端/安全。
-- **预计文件**：`rag_llm_server/observability/external_span.py`、`rag_llm_server/services/llm_service.py`、`rag_llm_server/services/asr_client.py`、`rag_llm_server/services/rtc_service.py`、`rag_llm_server/tests/test_external_tracing.py`。
+- **预计文件**：`rag_llm_server/observability/external_span.py`、`rag_llm_server/services/agent_llm.py`、`rag_llm_server/services/llm_service.py`、`rag_llm_server/services/asr_client.py`、`rag_llm_server/services/rtc_service.py`、`rag_llm_server/tests/test_external_tracing.py`。
 - **契约与步骤**：统一 provider/operation/model/outcome/http_status/duration/retry_count；仅记录输入输出 token 数、字节数和枚举结果，不记录 Prompt、转写或完整 URL query。
 - **失败处理**：供应商错误映射稳定 error.type；取消和超时分开；span 装饰器异常不得触发第二次供应商调用。
 - **验证/验收**：ARK/ASR/RTC 成功、超时、限流、取消测试通过；敏感样本不出现在 exporter 数据。
