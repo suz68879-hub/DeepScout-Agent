@@ -39,7 +39,7 @@ async def test_liveness_does_not_check_redis(monkeypatch):
     async def fail_if_called():
         raise AssertionError("liveness must not check Redis")
 
-    monkeypatch.setattr(main, "check_redis_readiness", fail_if_called)
+    monkeypatch.setattr(main.health_api, "check_redis", fail_if_called)
     transport = httpx.ASGITransport(app=main.create_app())
 
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
@@ -53,7 +53,7 @@ async def test_readiness_returns_generic_503_without_dependency_details(monkeypa
     async def unavailable():
         return False
 
-    monkeypatch.setattr(main, "check_redis_readiness", unavailable)
+    monkeypatch.setattr(main.health_api, "check_redis_readiness", unavailable)
     transport = httpx.ASGITransport(app=main.create_app())
 
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
@@ -62,7 +62,13 @@ async def test_readiness_returns_generic_503_without_dependency_details(monkeypa
     assert response.status_code == 503
     assert response.json() == {
         "status": "not_ready",
-        "components": {"redis": "unavailable"},
+        "components": {
+            "configuration": "ready",
+            "migrations": "disabled",
+            "postgresql": "disabled",
+            "redis": "unavailable",
+            "rabbitmq": "disabled",
+        },
     }
     assert "host" not in response.text.lower()
 
@@ -80,11 +86,14 @@ async def test_lifespan_initializes_and_closes_resources(monkeypatch):
     monkeypatch.setattr(main, "close_storage", lambda: record("close_storage"))
     monkeypatch.setattr(main, "close_redis", lambda: record("close_redis"))
     monkeypatch.setattr(main.registry, "render_all", lambda: None)
+    monkeypatch.setattr(main.registry, "errors", [])
     monkeypatch.setattr("services.storage.get_tos_store", lambda: None)
 
     async with main.lifespan(main.create_app()):
         assert events == ["init_redis", "init_storage", "init_graph"]
+        assert (await main.health_api.startup()).status_code == 200
 
+    assert (await main.health_api.startup()).status_code == 503
     assert events == [
         "init_redis", "init_storage", "init_graph", "close_graph",
         "close_redis", "close_storage",

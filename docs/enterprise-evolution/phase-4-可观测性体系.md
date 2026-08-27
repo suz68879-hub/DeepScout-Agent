@@ -84,6 +84,7 @@
 
 ### P4-T06 实现健康与就绪探针
 
+- **实施状态**：已完成；live/ready/startup/兼容探针、组件超时、迁移落后、依赖恢复和安全响应测试通过。
 - **依赖/并行**：Phase 1/2/3；可与 P4-T04/P4-T05 并行。**规模/角色**：M，后端/SRE。
 - **预计文件**：`rag_llm_server/api/health.py`、`rag_llm_server/main.py`、`rag_llm_server/tests/test_health_api.py`、`rag_llm_server/tests/test_lifecycle.py`。
 - **契约与步骤**：`/health/live` 只检查 event loop；`/health/ready` 检查配置、Alembic head、PG、Redis 和任务提交能力；`/health/startup` 检查 Prompt/连接池初始化；旧 `/health` 一个发布窗口映射 ready 并带 deprecation header。
@@ -93,9 +94,9 @@
 
 #### 检查点 B：P4-T04～P4-T06
 
-- [ ] 核心 SLI 可由现有指标计算。
-- [ ] 外部调用 spans 完成脱敏验证。
-- [ ] live/ready/startup 的故障语义互不混淆。
+- [x] 核心 SLI 可由现有指标计算。
+- [x] 外部调用 spans 完成脱敏验证。
+- [x] live/ready/startup 的故障语义互不混淆。
 
 ### P4-T07 建立 Grafana 仪表盘
 

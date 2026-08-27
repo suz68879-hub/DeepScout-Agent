@@ -13,6 +13,7 @@ from agents.prompts.registry import registry
 from api import analytics as analytics_api
 from api import auth as auth_api
 from api import debug as debug_api
+from api import health as health_api
 from api import interview as interview_api
 from api import jobs as jobs_api
 from api import recording as recording_api
@@ -30,7 +31,7 @@ from observability.telemetry import (
     shutdown_telemetry,
 )
 from observability.metrics import is_internal_metrics_client, service_metrics
-from services.redis_client import check_redis_readiness, close_redis, init_redis
+from services.redis_client import close_redis, init_redis
 from services.storage import close_storage, init_storage
 
 logger = logging.getLogger(__name__)
@@ -38,6 +39,7 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    health_api.mark_startup_incomplete()
     initialize_telemetry(TelemetryConfig.from_environment(settings.APP_ENV))
     try:
         await init_database()
@@ -57,8 +59,10 @@ async def lifespan(_app: FastAPI):
         if registry.errors:
             logger.warning("Prompt loading warnings: %s", registry.errors)
 
+        health_api.mark_startup_complete(prompts_ready=not registry.errors)
         yield
     finally:
+        health_api.mark_startup_incomplete()
         await close_graph()
         await close_redis()
         await close_storage()
@@ -115,22 +119,6 @@ def create_app() -> FastAPI:
 
     application.add_exception_handler(Exception, unhandled_exception_handler)
 
-    @application.get("/health/live", include_in_schema=False)
-    async def liveness():
-        return {"status": "live"}
-
-    @application.get("/health/ready", include_in_schema=False)
-    async def readiness():
-        if await check_redis_readiness():
-            return {"status": "ready"}
-        return JSONResponse(
-            status_code=503,
-            content={
-                "status": "not_ready",
-                "components": {"redis": "unavailable"},
-            },
-        )
-
     @application.get("/metrics", include_in_schema=False)
     async def metrics_endpoint(request: Request):
         client_host = request.client.host if request.client else None
@@ -142,6 +130,7 @@ def create_app() -> FastAPI:
         )
 
     application.include_router(auth_api.router)
+    application.include_router(health_api.router)
     application.include_router(resume_api.router)
     application.include_router(interview_api.router)
     application.include_router(jobs_api.router)
