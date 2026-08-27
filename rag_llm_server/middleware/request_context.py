@@ -1,4 +1,5 @@
 """Request ID validation, propagation and per-request context isolation."""
+import asyncio
 import logging
 import uuid
 from collections.abc import Mapping
@@ -92,7 +93,9 @@ def job_consumer_span(
         context=parent,
         kind=SpanKind.CONSUMER,
         attributes=attributes,
-    ):
+        record_exception=False,
+        set_status_on_exception=False,
+    ) as span:
         if rejected:
             logger.warning(
                 "Rejected invalid trace context",
@@ -101,6 +104,14 @@ def job_consumer_span(
         token = _job_id.set(locked_job_id)
         try:
             yield
+        except asyncio.CancelledError:
+            span.set_status(Status(StatusCode.ERROR))
+            span.set_attribute("error.type", "cancelled")
+            raise
+        except Exception:
+            span.set_status(Status(StatusCode.ERROR))
+            span.set_attribute("error.type", "processing")
+            raise
         finally:
             _job_id.reset(token)
 

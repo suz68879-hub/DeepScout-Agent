@@ -48,8 +48,9 @@
 
 ### P4-T03 接入 PG、Redis 与 RabbitMQ 追踪
 
+- **实施状态**：已完成；SQLAlchemy、Redis 与 RabbitMQ 成功/失败链路、安全属性和重复注册测试通过。
 - **依赖/并行**：P4-T01、Phase 2、Phase 3。**规模/角色**：M，后端/SRE。
-- **预计文件**：`rag_llm_server/observability/instrumentation.py`、`rag_llm_server/db/engine.py`、`rag_llm_server/services/redis_client.py`、`rag_llm_server/tasks/celery_app.py`、`rag_llm_server/tests/test_dependency_tracing.py`。
+- **预计文件**：`rag_llm_server/observability/instrumentation.py`、`rag_llm_server/db/engine.py`、`rag_llm_server/services/redis_client.py`、`rag_llm_server/services/jobs/outbox.py`、`rag_llm_server/middleware/request_context.py`、`rag_llm_server/tasks/celery_app.py`、`rag_llm_server/tests/test_dependency_tracing.py`。
 - **契约与步骤**：启用 SQLAlchemy/Redis/Celery instrumentation；数据库 span 只保留规范化 operation/table，不记录 bind values；broker span 不记录 message body。
 - **失败处理**：instrumentation 初始化失败输出单条安全错误并禁用该插件，不重复注册；追踪异常不改变业务结果。
 - **验证/验收**：每类依赖有成功、超时、错误 span；测试断言无 DSN、SQL 参数、Redis key 原始输入和消息正文。
@@ -57,9 +58,9 @@
 
 #### 检查点 A：P4-T01～P4-T03
 
-- [ ] Collector 可接收并路由三类遥测。
-- [ ] HTTP、数据库、缓存、消息 span 可关联。
-- [ ] spans/logs 不包含凭据和业务正文。
+- [x] Collector 可接收并路由三类遥测。
+- [x] HTTP、数据库、缓存、消息 span 可关联。
+- [x] spans/logs 不包含凭据和业务正文。
 
 ### P4-T04 为外部供应商建立脱敏 Span
 

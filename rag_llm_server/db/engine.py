@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import (
 )
 
 from config import Config, settings
+from observability.instrumentation import instrument_sqlalchemy
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +61,7 @@ def build_database_runtime(config: Config) -> DatabaseRuntime:
         pool_timeout=config.DATABASE_POOL_TIMEOUT,
         pool_recycle=config.DATABASE_POOL_RECYCLE,
     )
+    instrument_sqlalchemy(engine)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     return DatabaseRuntime(engine, session_factory)
 

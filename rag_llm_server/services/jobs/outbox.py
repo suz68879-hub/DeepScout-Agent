@@ -9,7 +9,7 @@ from typing import Protocol
 from celery import Celery
 from opentelemetry import trace
 from opentelemetry.context import Context
-from opentelemetry.trace import SpanKind
+from opentelemetry.trace import SpanKind, Status, StatusCode
 from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -277,7 +277,9 @@ class CeleryOutboxPublisher:
                 "job.id": str(event.aggregate_id),
                 "job.type": job_type.value,
             },
-        ):
+            record_exception=False,
+            set_status_on_exception=False,
+        ) as span:
             outbound_headers: dict[str, str] = {}
             TraceContextTextMapPropagator().inject(outbound_headers)
             options = {
@@ -292,7 +294,23 @@ class CeleryOutboxPublisher:
             }
             if outbound_headers:
                 options["headers"] = outbound_headers
-            await asyncio.to_thread(self._app.send_task, route.task_name, **options)
+            try:
+                await asyncio.to_thread(
+                    self._app.send_task,
+                    route.task_name,
+                    **options,
+                )
+            except Exception as exc:
+                error_type = (
+                    "timeout"
+                    if isinstance(exc, (TimeoutError, asyncio.TimeoutError))
+                    else "connection"
+                    if isinstance(exc, (ConnectionError, OSError))
+                    else "publish"
+                )
+                span.set_status(Status(StatusCode.ERROR))
+                span.set_attribute("error.type", error_type)
+                raise
 
 
 class OutboxDispatcher:

@@ -8,6 +8,7 @@ from redis.exceptions import RedisError
 from redis.exceptions import TimeoutError as RedisTimeoutError
 
 from config import Config, settings
+from observability.instrumentation import instrument_redis_client
 
 
 class RedisFailureKind(str, Enum):
@@ -97,6 +98,7 @@ async def init_redis(config: Config = settings) -> Redis | None:
         socket_timeout=config.REDIS_SOCKET_TIMEOUT,
         socket_connect_timeout=config.REDIS_CONNECT_TIMEOUT,
     )
+    instrument_redis_client(client)
     try:
         await client.ping()
     except (RedisError, OSError, asyncio.TimeoutError) as exc:
