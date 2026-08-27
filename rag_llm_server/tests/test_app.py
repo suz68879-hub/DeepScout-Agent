@@ -53,6 +53,10 @@ async def test_readiness_returns_generic_503_without_dependency_details(monkeypa
     async def unavailable():
         return False
 
+    # 固定后端为非 postgres，使 pg/migration 组件确定性为 disabled，
+    # 让本用例不依赖运行环境（CI 用 postgres，本地默认 sqlite）。
+    monkeypatch.setattr(main.settings, "STORAGE_BACKEND", "sqlite")
+    monkeypatch.setattr(main.settings, "CELERY_BROKER_URL", "")
     monkeypatch.setattr(main.health_api, "check_redis_readiness", unavailable)
     transport = httpx.ASGITransport(app=main.create_app())
 
