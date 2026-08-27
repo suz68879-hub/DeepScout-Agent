@@ -100,6 +100,7 @@
 
 ### P4-T07 建立 Grafana 仪表盘
 
+- **实施状态**：已完成；4 个 dashboard、23 个面板和文件 provisioning 已通过 JSON/YAML 结构与低基数查询校验。
 - **依赖/并行**：检查点 B。**规模/角色**：M，SRE。
 - **预计文件**：`observability/grafana/dashboards/api.json`、`worker.json`、`dependencies.json`、`business.json`、`provisioning/dashboards.yaml`。
 - **契约与步骤**：API 面板覆盖 RED；worker 覆盖 job rate/duration/error、queue age/depth/DLQ；依赖覆盖 PG pool/Redis/Rabbit/provider；业务面板只使用聚合指标。

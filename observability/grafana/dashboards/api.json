@@ -1,0 +1,69 @@
+{
+  "annotations": {"list": []},
+  "description": "API RED、可用性 SLO 与实时首 token。空序列保持 No data。",
+  "editable": false,
+  "graphTooltip": 1,
+  "links": [
+    {"title": "Logs", "type": "link", "url": "/explore?orgId=1&left={\"datasource\":\"loki\",\"queries\":[{\"expr\":\"{service_name=\\\"$service\\\",environment=\\\"$environment\\\"}\"}]}"},
+    {"title": "Traces", "type": "link", "url": "/explore?orgId=1&left={\"datasource\":\"tempo\",\"queries\":[{\"query\":\"{resource.service.name=\\\"$service\\\"}\"}]}"}
+  ],
+  "panels": [
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"unit": "reqps"}},
+      "gridPos": {"h": 8, "w": 8, "x": 0, "y": 0},
+      "id": 1,
+      "targets": [{"expr": "sum(rate(http_server_requests_total{environment=\"$environment\",service=\"$service\"}[5m]))", "legendFormat": "requests"}],
+      "title": "Request rate",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"unit": "percentunit", "min": 0, "max": 1}},
+      "gridPos": {"h": 8, "w": 8, "x": 8, "y": 0},
+      "id": 2,
+      "targets": [{"expr": "sum(rate(http_server_requests_total{environment=\"$environment\",service=\"$service\",status_class=\"5xx\"}[5m])) / sum(rate(http_server_requests_total{environment=\"$environment\",service=\"$service\"}[5m]))", "legendFormat": "5xx ratio"}],
+      "title": "Error ratio",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"unit": "s"}},
+      "gridPos": {"h": 8, "w": 8, "x": 16, "y": 0},
+      "id": 3,
+      "targets": [{"expr": "histogram_quantile(0.95, sum by (le) (rate(http_server_request_duration_seconds_bucket{environment=\"$environment\",service=\"$service\"}[5m])))", "legendFormat": "p95"}],
+      "title": "API latency p95",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"unit": "percentunit", "min": 0, "max": 1}},
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8},
+      "id": 4,
+      "targets": [{"expr": "1 - (sum(rate(http_server_requests_total{environment=\"$environment\",service=\"$service\",status_class=\"5xx\"}[30d])) / sum(rate(http_server_requests_total{environment=\"$environment\",service=\"$service\"}[30d])))", "legendFormat": "availability"}],
+      "title": "Monthly availability SLI (target 99.9%)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"unit": "s"}},
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8},
+      "id": 5,
+      "targets": [{"expr": "histogram_quantile(0.95, sum by (le) (rate(interview_first_token_seconds_bucket{environment=\"$environment\",service=\"$service\"}[10m])))", "legendFormat": "p95"}],
+      "title": "First token p95 (target <2s)",
+      "type": "timeseries"
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "tags": ["deepscout", "api", "slo"],
+  "templating": {"list": [
+    {"name": "environment", "label": "Environment", "type": "query", "datasource": {"type": "prometheus", "uid": "prometheus"}, "query": "label_values(http_server_requests_total, environment)", "refresh": 1},
+    {"name": "service", "label": "Service", "type": "query", "datasource": {"type": "prometheus", "uid": "prometheus"}, "query": "label_values(http_server_requests_total{environment=\"$environment\"}, service)", "refresh": 1}
+  ]},
+  "time": {"from": "now-6h", "to": "now"},
+  "timezone": "browser",
+  "title": "DeepScout / API",
+  "uid": "deepscout-api",
+  "version": 1
+}

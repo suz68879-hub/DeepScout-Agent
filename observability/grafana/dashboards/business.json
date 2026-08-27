@@ -1,0 +1,29 @@
+{
+  "annotations": {"list": []},
+  "description": "只使用聚合指标的业务健康视图，不包含用户、会话、任务或文件标识。",
+  "editable": false,
+  "graphTooltip": 1,
+  "links": [
+    {"title": "API dashboard", "type": "link", "url": "/d/deepscout-api?var-environment=$environment&var-service=$service"},
+    {"title": "Worker dashboard", "type": "link", "url": "/d/deepscout-worker?var-environment=$environment&var-service=$service"}
+  ],
+  "panels": [
+    {"id": 1, "title": "Interview completion rate", "type": "timeseries", "gridPos": {"h": 8, "w": 8, "x": 0, "y": 0}, "datasource": {"type": "prometheus", "uid": "prometheus"}, "targets": [{"expr": "sum(rate(background_jobs_total{environment=\"$environment\",service=\"$service\",job_type=\"interview.finish\",outcome=\"succeeded\"}[30m]))", "legendFormat": "completed"}]},
+    {"id": 2, "title": "Recording completion rate", "type": "timeseries", "gridPos": {"h": 8, "w": 8, "x": 8, "y": 0}, "datasource": {"type": "prometheus", "uid": "prometheus"}, "targets": [{"expr": "sum(rate(background_jobs_total{environment=\"$environment\",service=\"$service\",job_type=\"recording.process\",outcome=\"succeeded\"}[30m]))", "legendFormat": "completed"}]},
+    {"id": 3, "title": "Realtime experience p95", "type": "timeseries", "gridPos": {"h": 8, "w": 8, "x": 16, "y": 0}, "datasource": {"type": "prometheus", "uid": "prometheus"}, "fieldConfig": {"defaults": {"unit": "s"}}, "targets": [{"expr": "histogram_quantile(0.95, sum by (le) (rate(interview_first_token_seconds_bucket{environment=\"$environment\",service=\"$service\"}[10m])))", "legendFormat": "first token p95"}]},
+    {"id": 4, "title": "Task success ratio by type", "type": "timeseries", "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8}, "datasource": {"type": "prometheus", "uid": "prometheus"}, "fieldConfig": {"defaults": {"unit": "percentunit", "min": 0, "max": 1}}, "targets": [{"expr": "sum by (job_type) (rate(background_jobs_total{environment=\"$environment\",service=\"$service\",outcome=\"succeeded\"}[30m])) / sum by (job_type) (rate(background_jobs_total{environment=\"$environment\",service=\"$service\"}[30m]))", "legendFormat": "{{job_type}}"}]},
+    {"id": 5, "title": "API availability", "type": "timeseries", "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8}, "datasource": {"type": "prometheus", "uid": "prometheus"}, "fieldConfig": {"defaults": {"unit": "percentunit", "min": 0, "max": 1}}, "targets": [{"expr": "1 - (sum(rate(http_server_requests_total{environment=\"$environment\",service=\"$service\",status_class=\"5xx\"}[30m])) / sum(rate(http_server_requests_total{environment=\"$environment\",service=\"$service\"}[30m])))", "legendFormat": "availability"}]}
+  ],
+  "refresh": "1m",
+  "schemaVersion": 39,
+  "tags": ["deepscout", "business", "aggregate-only"],
+  "templating": {"list": [
+    {"name": "environment", "label": "Environment", "type": "query", "datasource": {"type": "prometheus", "uid": "prometheus"}, "query": "label_values(background_jobs_total, environment)", "refresh": 1},
+    {"name": "service", "label": "Service", "type": "query", "datasource": {"type": "prometheus", "uid": "prometheus"}, "query": "label_values(background_jobs_total{environment=\"$environment\"}, service)", "refresh": 1}
+  ]},
+  "time": {"from": "now-24h", "to": "now"},
+  "timezone": "browser",
+  "title": "DeepScout / Business",
+  "uid": "deepscout-business",
+  "version": 1
+}
