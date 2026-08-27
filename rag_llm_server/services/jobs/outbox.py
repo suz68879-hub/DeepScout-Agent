@@ -11,10 +11,11 @@ from opentelemetry import trace
 from opentelemetry.context import Context
 from opentelemetry.trace import SpanKind, Status, StatusCode
 from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.models import OutboxEvent
+from observability.metrics import service_metrics
 from services.jobs.handlers import JobType
 
 logger = logging.getLogger(__name__)
@@ -102,6 +103,16 @@ class OutboxRepository:
 
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
+
+    async def refresh_unpublished_metric(self) -> None:
+        count = await self._session.scalar(
+            select(func.count(OutboxEvent.id)).where(
+                OutboxEvent.published_at.is_(None)
+            )
+        )
+        locked_count = int(count or 0)
+        service_metrics.set_outbox_unpublished(locked_count)
+        service_metrics.set_queue_depth("outbox", locked_count)
 
     async def claim_due(
         self,
@@ -319,6 +330,9 @@ class OutboxDispatcher:
     def __init__(self, session: AsyncSession, publisher: OutboxPublisher) -> None:
         self._outbox = OutboxRepository(session)
         self._publisher = publisher
+
+    async def refresh_unpublished_metric(self) -> None:
+        await self._outbox.refresh_unpublished_metric()
 
     async def dispatch_batch(
         self,

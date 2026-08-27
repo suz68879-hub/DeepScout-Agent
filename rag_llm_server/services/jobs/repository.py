@@ -6,6 +6,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.models import BackgroundJob
+from observability.metrics import service_metrics
 from services.jobs.types import JobConflictError, JobErrorCode, JobRecord, JobStatus
 
 
@@ -45,11 +46,48 @@ def _record(model: BackgroundJob) -> JobRecord:
     )
 
 
+def _record_terminal_metric(job: JobRecord) -> None:
+    if job.status not in {
+        JobStatus.CANCELLED,
+        JobStatus.FAILED,
+        JobStatus.SUCCEEDED,
+    }:
+        return
+    started_at = job.started_at or job.created_at
+    finished_at = job.finished_at or job.updated_at
+    try:
+        service_metrics.record_job(
+            job.job_type,
+            job.status.value,
+            max(0.0, (finished_at - started_at).total_seconds()),
+        )
+    except Exception:
+        pass
+
+
 class JobRepository:
     """Job persistence bound to one caller-owned AsyncSession transaction."""
 
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
+
+    async def refresh_queue_depth_metrics(self) -> None:
+        rows = (
+            await self._session.execute(
+                select(BackgroundJob.job_type, func.count(BackgroundJob.id))
+                .where(BackgroundJob.status == JobStatus.PENDING.value)
+                .group_by(BackgroundJob.job_type)
+            )
+        ).all()
+        counts = {job_type: count for job_type, count in rows}
+        service_metrics.set_queue_depth(
+            "cold",
+            counts.get("interview.finish", 0),
+        )
+        service_metrics.set_queue_depth(
+            "recording",
+            counts.get("recording.process", 0),
+        )
 
     async def create(
         self,
@@ -179,13 +217,15 @@ class JobRepository:
         now: datetime | None = None,
     ) -> JobRecord:
         finished_at = _now(now)
-        return await self._finish(
+        job = await self._finish(
             job_id,
             status=JobStatus.SUCCEEDED,
             finished_at=finished_at,
             result_ref=dict(result_ref),
             error_code=None,
         )
+        _record_terminal_metric(job)
+        return job
 
     async def fail(
         self,
@@ -196,12 +236,14 @@ class JobRepository:
     ) -> JobRecord:
         public_code = JobErrorCode(error_code)
         finished_at = _now(now)
-        return await self._finish(
+        job = await self._finish(
             job_id,
             status=JobStatus.FAILED,
             finished_at=finished_at,
             error_code=public_code.value,
         )
+        _record_terminal_metric(job)
+        return job
 
     async def _finish(
         self,
@@ -303,7 +345,9 @@ class JobRepository:
         )
         if model is None:
             raise JobConflictError("job state conflict")
-        return _record(model)
+        job = _record(model)
+        _record_terminal_metric(job)
+        return job
 
     async def cancel(
         self,
@@ -332,7 +376,9 @@ class JobRepository:
         )
         if model is None:
             raise JobConflictError("job state conflict")
-        return _record(model)
+        job = _record(model)
+        _record_terminal_metric(job)
+        return job
 
     async def requeue_expired(
         self,
@@ -379,7 +425,10 @@ class JobRepository:
                 .returning(BackgroundJob)
             )
         ).all()
-        return [_record(model) for model in models]
+        jobs = [_record(model) for model in models]
+        for job in jobs:
+            _record_terminal_metric(job)
+        return jobs
 
     async def recover_expired(
         self,
@@ -417,4 +466,7 @@ class JobRepository:
             )
             .returning(BackgroundJob)
         )
-        return _record(model) if model is not None else None
+        job = _record(model) if model is not None else None
+        if job is not None:
+            _record_terminal_metric(job)
+        return job

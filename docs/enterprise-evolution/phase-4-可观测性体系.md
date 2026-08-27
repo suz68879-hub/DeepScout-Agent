@@ -74,8 +74,9 @@
 
 ### P4-T05 增加核心指标
 
+- **实施状态**：已完成；HTTP、首 token、外部请求、任务、队列/Outbox、数据库池与 Redis 指标及内网 `/metrics` 测试通过。
 - **依赖/并行**：P4-T03、P4-T04。**规模/角色**：M，后端/SRE。
-- **预计文件**：`rag_llm_server/observability/metrics.py`、`rag_llm_server/main.py`、`rag_llm_server/services/jobs/repository.py`、`rag_llm_server/tests/test_metrics.py`。
+- **预计文件**：`rag_llm_server/observability/metrics.py`、`rag_llm_server/observability/external_span.py`、`rag_llm_server/observability/instrumentation.py`、`rag_llm_server/main.py`、`rag_llm_server/middleware/request_context.py`、`rag_llm_server/agents/interviewer.py`、`rag_llm_server/services/jobs/repository.py`、`rag_llm_server/services/jobs/outbox.py`、`rag_llm_server/tasks/outbox_dispatcher.py`、`rag_llm_server/tests/test_metrics.py`。
 - **契约与步骤**：实现设计文档中的 HTTP、首 token、外部请求、job、queue depth、outbox、DB pool、Redis error 指标；histogram bucket 与 SLO 对齐；`/metrics` 仅内网访问。
 - **失败处理**：未知 route 使用模板 `unknown`；禁止动态 label；采集队列深度失败记录 error counter，不让 scrape 失败。
 - **验证/验收**：指标类型、bucket、固定 labels 和并发计数测试通过；高基数扫描确认无 ID/文件名 label。

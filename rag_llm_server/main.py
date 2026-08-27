@@ -5,7 +5,8 @@ from contextlib import asynccontextmanager
 import uvicorn
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 from agents.graph import close_graph, init_graph
 from agents.prompts.registry import registry
@@ -28,6 +29,7 @@ from observability.telemetry import (
     initialize_telemetry,
     shutdown_telemetry,
 )
+from observability.metrics import is_internal_metrics_client, service_metrics
 from services.redis_client import check_redis_readiness, close_redis, init_redis
 from services.storage import close_storage, init_storage
 
@@ -127,6 +129,16 @@ def create_app() -> FastAPI:
                 "status": "not_ready",
                 "components": {"redis": "unavailable"},
             },
+        )
+
+    @application.get("/metrics", include_in_schema=False)
+    async def metrics_endpoint(request: Request):
+        client_host = request.client.host if request.client else None
+        if not is_internal_metrics_client(client_host):
+            return JSONResponse(status_code=403, content={"detail": "forbidden"})
+        return Response(
+            generate_latest(service_metrics.registry),
+            media_type=CONTENT_TYPE_LATEST,
         )
 
     application.include_router(auth_api.router)

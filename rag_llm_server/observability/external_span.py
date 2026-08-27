@@ -10,6 +10,8 @@ from langchain_core.callbacks import BaseCallbackHandler
 from opentelemetry import trace
 from opentelemetry.trace import SpanKind, Status, StatusCode
 
+from observability.metrics import service_metrics
+
 _PROVIDERS = frozenset({"ark", "asr", "rtc"})
 _SAFE_NAME = re.compile(r"[^A-Za-z0-9_.-]+")
 
@@ -51,6 +53,8 @@ class ExternalCallSpan:
     ) -> None:
         locked_provider = provider if provider in _PROVIDERS else "other"
         locked_operation = _safe_name(operation, maximum=64)
+        self._provider = locked_provider
+        self._operation = locked_operation
         tracer = (
             tracer_provider.get_tracer(__name__)
             if tracer_provider is not None
@@ -74,6 +78,7 @@ class ExternalCallSpan:
         self._span = None
         self._started_at = 0.0
         self._outcome_set = False
+        self._outcome = "success"
 
     def __enter__(self):
         self._started_at = time.perf_counter()
@@ -119,6 +124,7 @@ class ExternalCallSpan:
         output_size: int | None,
     ) -> None:
         self._outcome_set = True
+        self._outcome = outcome
         self._span.set_attribute("external.outcome", outcome)
         if http_status is not None:
             self._span.set_attribute("http.response.status_code", int(http_status))
@@ -138,6 +144,15 @@ class ExternalCallSpan:
             self.succeed()
         duration_ms = (time.perf_counter() - self._started_at) * 1000
         self._span.set_attribute("external.duration_ms", duration_ms)
+        try:
+            service_metrics.record_external(
+                self._provider,
+                self._operation,
+                self._outcome,
+                duration_ms / 1000,
+            )
+        except Exception:
+            pass
         return self._span_manager.__exit__(exc_type, exc, traceback)
 
 
@@ -223,6 +238,15 @@ class ExternalLLMCallbackHandler(BaseCallbackHandler):
             "external.duration_ms",
             (time.perf_counter() - started_at) * 1000,
         )
+        try:
+            service_metrics.record_external(
+                "ark",
+                "chat",
+                "success",
+                time.perf_counter() - started_at,
+            )
+        except Exception:
+            pass
         span.end()
 
     def on_llm_error(self, error, *, run_id, **kwargs) -> None:
@@ -241,4 +265,13 @@ class ExternalLLMCallbackHandler(BaseCallbackHandler):
             (time.perf_counter() - started_at) * 1000,
         )
         span.set_status(Status(StatusCode.ERROR))
+        try:
+            service_metrics.record_external(
+                "ark",
+                "chat",
+                error_type,
+                time.perf_counter() - started_at,
+            )
+        except Exception:
+            pass
         span.end()

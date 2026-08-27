@@ -1,6 +1,7 @@
 """Request ID validation, propagation and per-request context isolation."""
 import asyncio
 import logging
+import time
 import uuid
 from collections.abc import Mapping
 from contextlib import contextmanager
@@ -13,6 +14,8 @@ from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapProp
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
+
+from observability.metrics import service_metrics
 
 _request_id: ContextVar[str | None] = ContextVar("request_id", default=None)
 _job_id: ContextVar[str | None] = ContextVar("job_id", default=None)
@@ -122,6 +125,7 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
         self._tracer = tracer or trace.get_tracer(__name__)
 
     async def dispatch(self, request: Request, call_next):
+        started_at = time.perf_counter()
         candidate = request.headers.get("X-Request-ID")
         request_id = candidate if _valid_request_id(candidate) else str(uuid.uuid4())
         token: Token = _request_id.set(request_id)
@@ -160,6 +164,15 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
                 span.set_attribute("http.response.status_code", response.status_code)
                 if response.status_code >= 500:
                     span.set_status(Status(StatusCode.ERROR))
+                try:
+                    service_metrics.record_http(
+                        request.method,
+                        route_template,
+                        response.status_code,
+                        time.perf_counter() - started_at,
+                    )
+                except Exception:
+                    pass
                 response.headers["X-Request-ID"] = request_id
                 return response
         finally:

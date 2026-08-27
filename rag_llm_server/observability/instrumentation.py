@@ -11,6 +11,8 @@ from redis.exceptions import RedisError
 from redis.exceptions import TimeoutError as RedisTimeoutError
 from sqlalchemy import event
 
+from observability.metrics import service_metrics
+
 logger = logging.getLogger(__name__)
 
 _REDIS_OPERATIONS = frozenset(
@@ -61,6 +63,20 @@ def _sanitize_sqlalchemy_span(
     span.update_name(f"{operation} {table}" if table else operation)
 
 
+def _database_connection_checked_out(*_args) -> None:
+    try:
+        service_metrics.database_connection_checked_out()
+    except Exception:
+        pass
+
+
+def _database_connection_checked_in(*_args) -> None:
+    try:
+        service_metrics.database_connection_checked_in()
+    except Exception:
+        pass
+
+
 def instrument_sqlalchemy(
     engine,
     *,
@@ -87,6 +103,16 @@ def instrument_sqlalchemy(
             sync_engine,
             "before_cursor_execute",
             _sanitize_sqlalchemy_span,
+        )
+        event.listen(
+            sync_engine.pool,
+            "checkout",
+            _database_connection_checked_out,
+        )
+        event.listen(
+            sync_engine.pool,
+            "checkin",
+            _database_connection_checked_in,
         )
     except Exception as exc:
         if not _sqlalchemy_failure_logged:
@@ -152,8 +178,13 @@ def instrument_redis_client(client, *, tracer_provider=None) -> bool:
                     span.set_attribute("error.type", "cancelled")
                     raise
                 except Exception as exc:
+                    error_type = _redis_error_type(exc)
                     span.set_status(Status(StatusCode.ERROR))
-                    span.set_attribute("error.type", _redis_error_type(exc))
+                    span.set_attribute("error.type", error_type)
+                    try:
+                        service_metrics.record_redis_error(operation, error_type)
+                    except Exception:
+                        pass
                     raise
 
         client.execute_command = execute_command
