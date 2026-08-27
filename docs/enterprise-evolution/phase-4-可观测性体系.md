@@ -130,6 +130,7 @@
 
 ### P4-T10 执行脱敏、基数与链路验收
 
+- **实施状态**：自动化验收已完成；敏感样本零命中、标签/序列基数受控、完整 trace 父子链、告警触发/恢复及 666 项后端测试通过；真实观测栈下钻和人工演练交付 Phase 5。
 - **依赖/并行**：P4-T09；最后执行。**规模/角色**：M，测试/SRE/安全。
 - **预计文件**：`rag_llm_server/tests/observability/test_redaction.py`、`test_cardinality.py`、`test_trace_flow.py`、`scripts/verify_observability.ps1`、`docs/enterprise-evolution/evidence/phase-4-acceptance.md`。
 - **契约与步骤**：运行完整业务合成流；扫描 log/span/metric；计算 time series 数量；触发一条告警并按 trace_id 定位到 worker/外部依赖。
@@ -139,10 +140,10 @@
 
 ## 4. 阶段退出门槛
 
-- [ ] Request ID、Trace ID、Job ID 可跨日志/Trace/任务关联。
+- [x] Request ID、Trace ID、Job ID 可跨日志/Trace/任务关联。
 - [ ] 核心 SLO 有指标、Dashboard、告警和演练过的 Runbook。
-- [ ] live/ready/startup 经故障注入验证且没有重启风暴。
-- [ ] 日志/Trace 无敏感正文，Metrics 无高基数 ID 标签。
+- [x] live/ready/startup 经故障注入验证且没有重启风暴。
+- [x] 日志/Trace 无敏感正文，Metrics 无高基数 ID 标签。
 
 ## 5. 风险与交接
 
