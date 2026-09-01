@@ -24,6 +24,7 @@ from services.storage import storage
 from services.storage.postgres import PostgresRepository
 
 DEFAULT_POSITION = "Java后端"
+HOT_PATH_COLD_WAIT_SECONDS = 5.0
 READINESS_PROMPT = "你好，我是今天的面试官懂小智。正式开始前，请问你准备好了吗？"
 SELF_INTRO_PROMPT = "好的，下面请进行一分钟左右的自我介绍。"
 WAITING_PROMPT = "好的，你准备好后告诉我“我准备好了”，我们再开始。"
@@ -190,10 +191,10 @@ async def _latest_cold_job(session_id: str) -> JobRecord | None:
 async def await_pending_cold(
     session_id: str,
     *,
-    timeout: float | None = None,
+    timeout: float | None = HOT_PATH_COLD_WAIT_SECONDS,
     poll_interval: float = 0.5,
 ) -> None:
-    """在接收下一轮前短暂等待该会话最新的持久冷任务。"""
+    """在接收下一轮前短暂等待该会话最新的持久冷任务；默认 5s，超时抛 PENDING。"""
     deadline = None if timeout is None else time.monotonic() + max(0.0, timeout)
     while True:
         job = await _latest_cold_job(session_id)

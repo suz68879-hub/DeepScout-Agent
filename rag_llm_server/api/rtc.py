@@ -13,6 +13,8 @@ from services.agent_llm import get_agent_llm
 from services.callback_verify import callback_replay_id, verify_callback
 from services.callback_replay import claim_callback_replay
 from services.interview_service import (
+    HOT_PATH_COLD_WAIT_SECONDS,
+    ColdPathStateError,
     _restore_state,
     await_pending_cold,
     schedule_cold_path,
@@ -22,8 +24,10 @@ from services.interview_service import (
 )
 from services.rtc_service import (
     ALLOWED_VOICE_CHAT_ACTIONS,
+    RTC_LOCK_WAIT_SECONDS,
     RTCConfigurationError,
     call_voice_chat_openapi,
+    get_rtc_lock,
     get_scenes_payload,
 )
 from services.distributed_lock import LockBusy, LockLost
@@ -129,47 +133,96 @@ async def chat_callback(request: Request, rtc_callback_id: str | None = None):
         return {"text": ""}
 
     async def generate_sse():
-        await await_pending_cold(session["id"])
-        user_text = messages[-1].get("content", "")
-        if not isinstance(user_text, str):
-            user_text = str(user_text)
-        config = session_config(session["id"])
-        state = await _restore_state(session)
-        graph = get_graph()
-        gate_reply = readiness_gate_reply(state, user_text)
-        if gate_reply is not None:
-            await graph.aupdate_state(config, {
-                "messages": [
-                    {"role": "user", "content": user_text},
-                    {"role": "assistant", "content": gate_reply},
-                ],
-                "pending_user_text": "",
-            }, as_node="interviewer")
-            yield sse_chunk(gate_reply)
+        spoken_done = False
+        try:
+            async with get_rtc_lock().lease_wait(
+                session["id"], timeout=RTC_LOCK_WAIT_SECONDS,
+            ):
+                try:
+                    await await_pending_cold(
+                        session["id"], timeout=HOT_PATH_COLD_WAIT_SECONDS,
+                    )
+                    user_text = messages[-1].get("content", "")
+                    if not isinstance(user_text, str):
+                        user_text = str(user_text)
+                    config = session_config(session["id"])
+                    state = await _restore_state(session)
+                    graph = get_graph()
+                    gate_reply = readiness_gate_reply(state, user_text)
+                    if gate_reply is not None:
+                        await graph.aupdate_state(config, {
+                            "messages": [
+                                {"role": "user", "content": user_text},
+                                {"role": "assistant", "content": gate_reply},
+                            ],
+                            "pending_user_text": "",
+                        }, as_node="interviewer")
+                        yield sse_chunk(gate_reply)
+                    else:
+                        await graph.aupdate_state(config, {
+                            "messages": [{"role": "user", "content": user_text}],
+                            "pending_user_text": user_text,
+                        }, as_node="__start__")
+                        await graph.ainvoke(None, config)
+                        full = ""
+                        async for chunk in generate_stream(
+                            state, user_text, get_agent_llm("interviewer"),
+                        ):
+                            full += chunk
+                            yield sse_chunk(chunk)
+                        await graph.aupdate_state(config, {
+                            "messages": [{"role": "assistant", "content": full}],
+                            "pending_user_text": "",
+                        }, as_node="interviewer")
+                        latest_state = dict((await graph.aget_state(config)).values or {})
+                        await schedule_cold_path(
+                            session["id"],
+                            session["user_id"],
+                            len(latest_state.get("messages", [])),
+                        )
+                    yield "data: [DONE]\n\n"
+                    spoken_done = True
+                except (ColdPathStateError, LockBusy, LockLost, SharedStateUnavailable):
+                    logger.warning(
+                        "RTC callback hot path degraded",
+                        extra={
+                            "event": "interview_hot_path_degraded",
+                            "session_id": session["id"],
+                        },
+                    )
+                    yield sse_chunk(ERROR_REPLY)
+                    yield "data: [DONE]\n\n"
+                    spoken_done = True
+                except Exception:
+                    logger.exception(
+                        "RTC callback hot path failed",
+                        extra={
+                            "event": "interview_hot_path_failed",
+                            "session_id": session["id"],
+                        },
+                    )
+                    yield sse_chunk(ERROR_REPLY)
+                    yield "data: [DONE]\n\n"
+                    spoken_done = True
+        except (LockBusy, LockLost, SharedStateUnavailable):
+            if spoken_done:
+                logger.warning(
+                    "RTC callback lock release failed after stream completed",
+                    extra={
+                        "event": "interview_hot_path_lock_release_failed",
+                        "session_id": session["id"],
+                    },
+                )
+                return
+            logger.warning(
+                "RTC callback hot path degraded",
+                extra={
+                    "event": "interview_hot_path_degraded",
+                    "session_id": session["id"],
+                },
+            )
+            yield sse_chunk(ERROR_REPLY)
             yield "data: [DONE]\n\n"
-            return
-        await graph.aupdate_state(config, {
-            "messages": [{"role": "user", "content": user_text}],
-            "pending_user_text": user_text,
-        }, as_node="__start__")
-        await graph.ainvoke(None, config)
-        full = ""
-        async for chunk in generate_stream(
-            state, user_text, get_agent_llm("interviewer"),
-        ):
-            full += chunk
-            yield sse_chunk(chunk)
-        await graph.aupdate_state(config, {
-            "messages": [{"role": "assistant", "content": full}],
-            "pending_user_text": "",
-        }, as_node="interviewer")
-        latest_state = dict((await graph.aget_state(config)).values or {})
-        await schedule_cold_path(
-            session["id"],
-            session["user_id"],
-            len(latest_state.get("messages", [])),
-        )
-        yield "data: [DONE]\n\n"
 
     return StreamingResponse(
         generate_sse(),

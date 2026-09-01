@@ -228,6 +228,20 @@ async def test_await_pending_cold_rejects_failed_predecessor(monkeypatch, status
         await isv.await_pending_cold("session-1", timeout=0)
 
 
+async def test_await_pending_cold_times_out_while_predecessor_still_running(monkeypatch):
+    async def latest(_session_id):
+        return type("Job", (), {"status": JobStatus.RUNNING})()
+
+    monkeypatch.setattr(isv, "_latest_cold_job", latest, raising=False)
+
+    with pytest.raises(isv.ColdPathStateError, match="PREVIOUS_COLD_PATH_PENDING"):
+        await isv.await_pending_cold("session-1", timeout=0)
+
+
+def test_hot_path_cold_wait_is_bounded_to_five_seconds():
+    assert isv.HOT_PATH_COLD_WAIT_SECONDS == 5.0
+
+
 async def test_run_cold_path_rereads_session_and_checkpoint_before_each_step(
     monkeypatch,
 ):
