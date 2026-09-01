@@ -188,7 +188,7 @@ async def finish_interview(
         return {
             "job_id": str(job.id),
             "session_id": body.session_id,
-            "status": "pending",
+            "status": job.status.value,
         }
 
     return await execute_idempotent(

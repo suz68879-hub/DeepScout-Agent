@@ -9,6 +9,7 @@ import { MAX_UPLOAD_BYTES } from '@/domain/recording/types';
 import type { ReportPage, ReportRow } from '@/domain/report/types';
 import { overallFromReport } from '@/domain/report/types';
 import type { ResumeRow } from '@/domain/resume/types';
+import { formatLocalDateTime } from '@/lib/datetime';
 import styles from './index.module.less';
 
 const POSITION_PRESETS = ['Java后端', 'AI Agent 应用开发', '后端开发（Go）', '大数据开发'];
@@ -92,7 +93,7 @@ export default function HomePage() {
       if (!shouldRetain) localStorage.removeItem(RECORDING_JOB_KEY);
       setRecording({
         status: 'failed',
-        error: '任务查询中断，请检查网络后继续查询',
+        error: e instanceof ApiError ? e.message : '任务查询中断，请检查网络后继续查询',
         saved: shouldRetain ? saved : undefined,
       });
     }
@@ -228,7 +229,7 @@ export default function HomePage() {
                     onClick={() => navigate(`/report/${r.id}`)}
                   >
                     <span className={styles.reportDate}>
-                      {r.created_at.slice(0, 16).replace('T', ' ')}
+                      {formatLocalDateTime(r.created_at)}
                     </span>
                     <span className={styles.reportPosition}>{r.position ?? '未知岗位'}</span>
                     <span className={styles.reportScore}>{overallFromReport(r).toFixed(1)} / 10</span>

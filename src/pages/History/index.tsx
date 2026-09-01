@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { getJson } from '@/api/rest';
 import type { ReportPage, ReportRow } from '@/domain/report/types';
 import { overallFromReport } from '@/domain/report/types';
+import { formatLocalDateTime } from '@/lib/datetime';
 import styles from './index.module.less';
 
 export default function HistoryPage() {
@@ -56,7 +57,7 @@ export default function HistoryPage() {
                 className={styles.row}
                 onClick={() => navigate(`/report/${r.id}`)}
               >
-                <span className={styles.date}>{r.created_at.slice(0, 16).replace('T', ' ')}</span>
+                <span className={styles.date}>{formatLocalDateTime(r.created_at)}</span>
                 <span className={styles.position}>{r.position ?? '未知岗位'}</span>
                 <span className={styles.score}>{overallFromReport(r).toFixed(1)} / 10</span>
                 <span className={styles.arrow}>&gt;</span>

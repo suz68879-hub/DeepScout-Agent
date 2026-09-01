@@ -47,6 +47,8 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 const JOB_STATUSES: JobStatus[] = ['pending', 'running', 'succeeded', 'failed', 'cancelled'];
 const JOB_POLL_INITIAL_MS = 2000;
 const JOB_POLL_MAX_MS = 10000;
+const JOB_POLL_DEADLINE_MS = 120_000;
+const JOB_POLL_TIMEOUT_MESSAGE = '报告生成超时，请稍后在历史记录中查看';
 
 function isNullableString(value: unknown): value is string | null {
   return value === null || typeof value === 'string';
@@ -98,16 +100,21 @@ export async function getJob(jobId: string, signal?: AbortSignal): Promise<JobRe
 async function pollJobAfter(
   jobId: string,
   delay: number,
+  startedAt: number,
   signal?: AbortSignal
 ): Promise<JobResponse> {
-  await wait(delay, signal);
+  const elapsed = Date.now() - startedAt;
+  if (elapsed >= JOB_POLL_DEADLINE_MS) {
+    throw new ApiError(408, JOB_POLL_TIMEOUT_MESSAGE);
+  }
+  await wait(Math.min(delay, JOB_POLL_DEADLINE_MS - elapsed), signal);
   const job = await getJob(jobId, signal);
   if (isTerminalJob(job.status)) return job;
-  return pollJobAfter(jobId, Math.min(delay * 2, JOB_POLL_MAX_MS), signal);
+  return pollJobAfter(jobId, Math.min(delay * 2, JOB_POLL_MAX_MS), startedAt, signal);
 }
 
 export function pollJob(jobId: string, signal?: AbortSignal): Promise<JobResponse> {
-  return pollJobAfter(jobId, JOB_POLL_INITIAL_MS, signal);
+  return pollJobAfter(jobId, JOB_POLL_INITIAL_MS, Date.now(), signal);
 }
 
 const JOB_ERROR_MESSAGES: Record<string, string> = {
@@ -133,7 +140,10 @@ export function getJson<T>(path: string): Promise<T> {
 export function postJson<T>(path: string, body: unknown): Promise<T> {
   return request<T>(path, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      'Idempotency-Key': crypto.randomUUID(),
+    },
     body: JSON.stringify(body),
   });
 }

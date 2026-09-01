@@ -142,7 +142,7 @@ export default function InterviewPage() {
         setPendingJob(null);
         navigate('/');
       }
-      Message.error('任务查询中断，请检查网络后重试');
+      Message.error(e instanceof ApiError ? e.message : '任务查询中断，请检查网络后重试');
     } finally {
       if (!signal.aborted) setHangingUp(false);
     }

@@ -1,3 +1,5 @@
+import type { JobStatus } from '@/domain/jobs/types';
+
 // 面试会话类型（对齐 api/interview.py 与 LangGraph 图状态）
 export type StageId = 'intro' | 'deepdive' | 'technical' | 'qa' | 'finish';
 
@@ -38,5 +40,5 @@ export interface StartResponse {
 export interface FinishResponse {
   job_id: string;
   session_id: string;
-  status: 'pending';
+  status: JobStatus;
 }
