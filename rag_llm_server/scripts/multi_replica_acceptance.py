@@ -92,6 +92,7 @@ def build_child_environment(
             "STORAGE_BACKEND": "postgres",
             "AUTH_SESSION_CACHE_ENABLED": "true",
             "AUTH_COOKIE_SECURE": "false",
+            "REGISTER_INVITE_CODE": "replica-invite",
             "REDIS_URL": redis_url,
             "RTC_CALLBACK_SECRET": "p2-t09-test-callback-secret",
             "MULTI_REPLICA_RTC_COUNTER_KEY": rtc_counter_key,
@@ -343,7 +344,7 @@ async def run_acceptance(*, rounds: int, redis_url: str) -> dict[str, Any]:
         registered = await client.request(
             "POST",
             "/api/auth/register",
-            json={"username": username, "password": password},
+            json={"username": username, "password": password, "invite_code": "replica-invite"},
         )
         _require_status(registered, 201, "register")
         user_id = registered.json()["id"]

@@ -7,14 +7,20 @@ from redis.exceptions import NoScriptError
 
 from services.redis_client import redis_error_boundary
 from services.redis_keys import (
+    CALLBACK_RATE_WINDOW_SECONDS,
+    LLM_RATE_WINDOW_SECONDS,
     LOGIN_WINDOW_SECONDS,
     REGISTER_WINDOW_SECONDS,
+    callback_rate_limit_key,
+    llm_rate_limit_key,
     login_rate_limit_key,
     register_rate_limit_key,
 )
 
 LOGIN_MAXIMUM = 5
 REGISTER_MAXIMUM = 10
+EXPENSIVE_MAXIMUM = 20
+CALLBACK_MAXIMUM = 30
 
 _CONSUME_SCRIPT = """
 local key = KEYS[1]
@@ -51,11 +57,15 @@ class RateLimiter:
         *,
         login_maximum: int = LOGIN_MAXIMUM,
         register_maximum: int = REGISTER_MAXIMUM,
+        expensive_maximum: int = EXPENSIVE_MAXIMUM,
+        callback_maximum: int = CALLBACK_MAXIMUM,
     ) -> None:
         self._client = client
         self._app_env = app_env
         self._login_maximum = login_maximum
         self._register_maximum = register_maximum
+        self._expensive_maximum = expensive_maximum
+        self._callback_maximum = callback_maximum
         self._consume_sha: str | None = None
 
     def matches(self, client: Redis, app_env: str) -> bool:
@@ -80,6 +90,14 @@ class RateLimiter:
     async def consume_register(self, client_ip: str) -> RateLimitDecision:
         key = register_rate_limit_key(self._app_env, client_ip)
         return await self._consume(key, REGISTER_WINDOW_SECONDS, self._register_maximum)
+
+    async def consume_expensive(self, user_id: str) -> RateLimitDecision:
+        key = llm_rate_limit_key(self._app_env, user_id)
+        return await self._consume(key, LLM_RATE_WINDOW_SECONDS, self._expensive_maximum)
+
+    async def consume_callback(self, client_ip: str, callback_id: str) -> RateLimitDecision:
+        key = callback_rate_limit_key(self._app_env, client_ip, callback_id)
+        return await self._consume(key, CALLBACK_RATE_WINDOW_SECONDS, self._callback_maximum)
 
     async def clear_login(self, client_ip: str, username: str) -> None:
         key = login_rate_limit_key(self._app_env, client_ip, username)

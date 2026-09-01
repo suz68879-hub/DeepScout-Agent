@@ -1,5 +1,6 @@
 """Password and opaque-session primitives for the local multi-user service."""
 import asyncio
+import hmac
 import hashlib
 import re
 import secrets
@@ -55,3 +56,12 @@ def create_session_token() -> tuple[str, str, str]:
     token = secrets.token_urlsafe(32)
     expires_at = datetime.now(timezone.utc) + timedelta(days=SESSION_DAYS)
     return token, token_digest(token), expires_at.isoformat()
+
+
+def invite_code_accepted(provided: str | None, configured: str | None) -> bool:
+    """未配置邀请码时关闭注册；匹配时用常量时间比较。"""
+    expected = (configured or "").strip().encode("utf-8")
+    actual = provided.strip().encode("utf-8") if isinstance(provided, str) else b""
+    if not expected or not actual or len(actual) != len(expected):
+        return False
+    return hmac.compare_digest(actual, expected)

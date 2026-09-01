@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from agents.text2sql import generate_query
-from api.auth import get_current_user
+from api.auth import require_user_quota
 from config import settings
 from mcp.postgres_server import query as postgres_query
 from mcp.sqlite_server import query as sqlite_query
@@ -19,7 +19,7 @@ class QueryRequest(BaseModel):
 
 
 @router.post("/query")
-async def analytics_query(body: QueryRequest, user: dict = Depends(get_current_user)):
+async def analytics_query(body: QueryRequest, user: dict = Depends(require_user_quota)):
     if not body.question.strip():
         raise HTTPException(status_code=400, detail="question cannot be empty")
     sql_query = await generate_query(body.question, get_agent_llm("text2sql"))

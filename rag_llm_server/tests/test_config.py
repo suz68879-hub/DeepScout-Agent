@@ -305,3 +305,24 @@ def test_session_cache_cannot_be_enabled_without_redis(monkeypatch):
 
     with pytest.raises(ValueError, match="AUTH_SESSION_CACHE_ENABLED requires REDIS_URL"):
         Config()
+
+
+def test_production_forces_secure_auth_cookie_even_when_disabled(monkeypatch):
+    _clear_database_env(monkeypatch)
+    _clear_redis_env(monkeypatch)
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("STORAGE_BACKEND", "postgres")
+    monkeypatch.setenv(
+        "DATABASE_URL",
+        "postgresql+psycopg://app:safe-secret@db.internal/deepscout",
+    )
+    monkeypatch.setenv("REDIS_URL", "rediss://cache.internal/0")
+    monkeypatch.setenv("CELERY_BROKER_URL", "amqps://mq.internal/app")
+    monkeypatch.setenv("AUTH_COOKIE_SECURE", "false")
+
+    assert Config().AUTH_COOKIE_SECURE is True
+
+
+def test_register_invite_code_is_read_from_environment(monkeypatch):
+    monkeypatch.setenv("REGISTER_INVITE_CODE", " office-pass ")
+    assert Config().REGISTER_INVITE_CODE == "office-pass"

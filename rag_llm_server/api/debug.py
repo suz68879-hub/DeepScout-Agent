@@ -4,12 +4,12 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from agents.interviewer import generate_stream
-from api.auth import get_current_user
+from api.auth import require_user_quota
 from services.agent_llm import get_agent_llm
 from services.rag_service import rag_service
 
 router = APIRouter(
-    prefix="/debug", tags=["debug"], dependencies=[Depends(get_current_user)],
+    prefix="/debug", tags=["debug"], dependencies=[Depends(require_user_quota)],
 )
 
 

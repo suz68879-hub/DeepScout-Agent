@@ -8,7 +8,7 @@ from pydantic import BaseModel
 from agents.graph import get_graph
 from agents.prompts.registry import registry
 from agents.reporter import generate_report
-from api.auth import get_current_user
+from api.auth import get_current_user, require_user_quota
 from config import settings
 from middleware.idempotency import execute_idempotent
 from services.agent_llm import get_agent_llm
@@ -41,7 +41,7 @@ def _load_structured(resume: dict | None) -> dict:
 @router.post("/start")
 async def start_interview(
     body: StartRequest,
-    user: dict = Depends(get_current_user),
+    user: dict = Depends(require_user_quota),
     request: Request = None,
 ):
     """创建新会话并初始化图状态；返回会话 ID 与岗位。"""
@@ -88,7 +88,7 @@ async def start_interview(
 @router.post("/finish", status_code=202)
 async def finish_interview(
     body: FinishRequest,
-    user: dict = Depends(get_current_user),
+    user: dict = Depends(require_user_quota),
     request: Request = None,
 ):
     """Accept durable report generation and return its queryable Job ID."""

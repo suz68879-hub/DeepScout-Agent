@@ -177,6 +177,7 @@ class Config:
     ENABLE_DEBUG_ROUTES = _bool_env("ENABLE_DEBUG_ROUTES", False)
     ENABLE_LEGACY_SYNC_FINISH = _bool_env("ENABLE_LEGACY_SYNC_FINISH", False)
     AUTH_COOKIE_SECURE = _bool_env("AUTH_COOKIE_SECURE", False)
+    REGISTER_INVITE_CODE = os.getenv("REGISTER_INVITE_CODE", "").strip()
     BOOTSTRAP_ADMIN_USERNAME = os.getenv("BOOTSTRAP_ADMIN_USERNAME")
     BOOTSTRAP_ADMIN_PASSWORD = os.getenv("BOOTSTRAP_ADMIN_PASSWORD")
 
@@ -234,6 +235,10 @@ class Config:
         )
         if self.APP_ENV not in {"development", "test", "production"}:
             raise ValueError("APP_ENV must be development, test, or production")
+        self.AUTH_COOKIE_SECURE = (
+            True if self.APP_ENV == "production" else _bool_env("AUTH_COOKIE_SECURE", False)
+        )
+        self.REGISTER_INVITE_CODE = os.getenv("REGISTER_INVITE_CODE", "").strip()
 
         self.STORAGE_BACKEND = os.getenv("STORAGE_BACKEND", "sqlite").strip().lower()
         if self.STORAGE_BACKEND not in {"sqlite", "postgres"}:

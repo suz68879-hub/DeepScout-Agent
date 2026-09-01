@@ -145,8 +145,15 @@ async def test_callback_rejects_tampered_messages_when_signature_was_valid(monke
 
 
 async def test_callback_rejects_replayed_event_id(monkeypatch):
+    from services.rate_limit import RateLimitDecision
+
+    class AllowLimiter:
+        async def consume_callback(self, *_args, **_kwargs):
+            return RateLimitDecision(True, 0)
+
     monkeypatch.setattr(rtc_api.settings, "RTC_CALLBACK_SECRET", "secret")
     monkeypatch.setattr(rtc_api, "verify_callback", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(rtc_api, "get_rate_limiter", lambda: AllowLimiter())
 
     async def already_seen(_event_id):
         return False
@@ -170,6 +177,39 @@ async def test_callback_rejects_non_object_json_body(monkeypatch):
     response = await rtc_api.chat_callback(Request(["not", "an", "object"]), "callback1")
     assert response.status_code == 403
     assert json.loads(response.body) == {"text": "signature verification failed"}
+
+
+async def test_callback_returns_429_when_callback_quota_exceeded(monkeypatch):
+    from services.rate_limit import RateLimitDecision
+
+    class DenyLimiter:
+        async def consume_callback(self, client_ip, callback_id):
+            assert callback_id == "callback1"
+            return RateLimitDecision(False, 15)
+
+    monkeypatch.setattr(rtc_api.settings, "RTC_CALLBACK_SECRET", "secret")
+    monkeypatch.setattr(rtc_api, "verify_callback", lambda *_args, **_kwargs: True)
+    claims = []
+
+    async def claimed(_event_id):
+        claims.append(_event_id)
+        return True
+
+    monkeypatch.setattr(rtc_api, "claim_callback_replay", claimed)
+    monkeypatch.setattr(rtc_api, "get_rate_limiter", lambda: DenyLimiter())
+    with pytest.raises(rtc_api.HTTPException) as exc_info:
+        await rtc_api.chat_callback(
+            Request({
+                "Signature": "ok",
+                "EventId": "evt-quota",
+                "EventTime": "1700000000",
+                "messages": [{"role": "user", "content": "你好"}],
+            }),
+            "callback1",
+        )
+    assert exc_info.value.status_code == 429
+    assert exc_info.value.headers["Retry-After"] == "15"
+    assert claims == []
 
 
 class RecordingLock:
@@ -204,6 +244,13 @@ def _patch_signed_callback(monkeypatch, *, lock=None):
         rtc_api.storage, "session_get_by_callback", lambda *_args: async_value(SESSION),
     )
     monkeypatch.setattr(rtc_api, "get_rtc_lock", lambda: lock or RecordingLock())
+
+    class AllowLimiter:
+        async def consume_callback(self, *_args, **_kwargs):
+            from services.rate_limit import RateLimitDecision
+            return RateLimitDecision(True, 0)
+
+    monkeypatch.setattr(rtc_api, "get_rate_limiter", lambda: AllowLimiter())
 
 
 USER_CALLBACK = {

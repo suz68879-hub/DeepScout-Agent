@@ -6,7 +6,7 @@ import uuid
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 
 from agents.resume_parser import parse_pdf, parse_text
-from api.auth import get_current_user
+from api.auth import get_current_user, require_user_quota
 from services.storage import storage
 
 router = APIRouter(prefix="/api/resume", tags=["resume"])
@@ -46,7 +46,7 @@ async def _create_and_parse(
 async def upload_resume(
     content: str = Form(...),
     source: str = Form("md"),
-    user: dict = Depends(get_current_user),
+    user: dict = Depends(require_user_quota),
 ):
     from services.agent_llm import get_agent_llm
 
@@ -59,7 +59,7 @@ async def upload_resume(
 @router.post("/upload_pdf")
 async def upload_resume_pdf(
     file: UploadFile = File(...),
-    user: dict = Depends(get_current_user),
+    user: dict = Depends(require_user_quota),
 ):
     from services.agent_llm import get_agent_llm
     from services.storage import get_tos_store

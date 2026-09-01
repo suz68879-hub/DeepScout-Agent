@@ -6,6 +6,7 @@ from config import settings
 from services.auth_service import (
     create_session_token,
     hash_password_async,
+    invite_code_accepted,
     normalize_username,
     token_digest,
     verify_password_async,
@@ -25,6 +26,10 @@ _rate_limiter: RateLimiter | None = None
 class Credentials(BaseModel):
     username: str = Field(min_length=3, max_length=32)
     password: str = Field(min_length=10, max_length=128)
+
+
+class RegisterCredentials(Credentials):
+    invite_code: str = Field(default="", max_length=128)
 
 
 class LoginCredentials(BaseModel):
@@ -112,14 +117,26 @@ async def get_current_user(request: Request) -> dict:
     return user
 
 
+async def require_user_quota(user: dict = Depends(get_current_user)) -> dict:
+    try:
+        decision = await get_rate_limiter().consume_expensive(user["id"])
+    except SharedStateUnavailable:
+        raise _shared_state_unavailable() from None
+    if not decision.allowed:
+        raise _rate_limit_error(decision, "too many requests")
+    return user
+
+
 @router.post("/register", status_code=201)
-async def register(body: Credentials, request: Request, response: Response):
+async def register(body: RegisterCredentials, request: Request, response: Response):
     try:
         decision = await get_rate_limiter().consume_register(_client_ip(request))
     except SharedStateUnavailable:
         raise _shared_state_unavailable() from None
     if not decision.allowed:
         raise _rate_limit_error(decision, "too many registration attempts")
+    if not invite_code_accepted(body.invite_code, settings.REGISTER_INVITE_CODE):
+        raise HTTPException(status_code=403, detail="invalid invite code")
     try:
         username = normalize_username(body.username)
         password_hash = await hash_password_async(body.password)
