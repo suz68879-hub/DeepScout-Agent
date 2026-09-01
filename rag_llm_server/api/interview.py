@@ -90,6 +90,7 @@ async def start_interview(
             "pending_user_text": "",
             "report": None,
             "prompt_versions": registry.snapshot_versions(),  # P7 §0.5：会话创建即固化提示词版本
+            "pending_ask": False,
         })
         return {"session_id": session["id"], "position": body.position, "stage": "intro"}
 

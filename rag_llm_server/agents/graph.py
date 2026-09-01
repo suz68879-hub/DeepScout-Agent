@@ -8,7 +8,7 @@
 Ruling R5：interviewer 节点在图内为占位——真实 LLM 流式生成在 HTTP 层执行
 （interview_service），以持有流式生成器；状态写入经 aupdate_state 完成，
 避免图内重复调用 LLM 计费。
-Ruling R8：qa/finish 阶段不评分（候选人在提问，非作答）。
+Ruling R8：intro/qa/finish 阶段不评分（开场自我介绍与候选人反问均非作答）。
 
 checkpointer 实现说明（偏离计划文本，环境适配）：langgraph 1.2.x 的同步
 SqliteSaver 对异步图 API（aget_state/aupdate_state/ainvoke）直接抛
@@ -35,7 +35,7 @@ from services.agent_llm import get_agent_llm
 from .evaluator import evaluate_round
 from .planner import generate_question
 from .reporter import generate_report
-from .stage_flow import PLANNING_STAGES, after_planner_route, maybe_advance_stage
+from .stage_flow import PLANNING_STAGES, UNSCORED_STAGES, after_planner_route, maybe_advance_stage
 from .state import InterviewState
 
 _checkpoint_conn: aiosqlite.Connection | None = None
@@ -95,10 +95,12 @@ async def interviewer_node(state: InterviewState) -> dict:
 
 
 async def evaluator_node(state: InterviewState) -> dict:
-    """冷路径：对上一轮回答评分；qa/finish 不评分（R8）；失败标记 status=failed。"""
-    round_no = state.get("round_no", 0) + 1
+    """冷路径：对上一轮回答评分；intro/qa/finish 不评分（R8）；失败标记 status=failed。"""
     stage = state.get("stage", "intro")
-    if stage in ("qa", "finish"):
+    if state.get("pending_ask"):
+        return {"scores": state.get("scores", []), "round_no": state.get("round_no", 0)}
+    round_no = state.get("round_no", 0) + 1
+    if stage in UNSCORED_STAGES:
         return {"scores": state.get("scores", []), "round_no": round_no}
     last_user = next(
         (m for m in reversed(state.get("messages", [])) if m["role"] == "user"), None
@@ -133,6 +135,12 @@ async def evaluator_node(state: InterviewState) -> dict:
 async def planner_node(state: InterviewState) -> dict:
     """冷路径：阶段推进判定 + 出题（intro/qa/finish 不出题）。"""
     stage = state.get("stage", "intro")
+    if state.get("pending_ask"):
+        return {
+            "pending_ask": False,
+            "stage": stage,
+            "current_question": state.get("current_question"),
+        }
     round_no = state.get("round_no", 0)
     projects = (state.get("resume") or {}).get("projects", [])
     project_count = len(projects) if projects else 1
@@ -154,6 +162,9 @@ async def planner_node(state: InterviewState) -> dict:
         ]
         updates["current_question"] = question.model_dump()
         updates["questions_asked"] = asked
+        if nxt:
+            # 刚进入新阶段：下一轮热路径先宣读题目，冷路径不得把「还没听到题」的发言当答案
+            updates["pending_ask"] = True
     else:
         updates["current_question"] = None
     return updates

@@ -47,14 +47,24 @@ def test_build_system_messages_without_resume():
     assert "尚未上传简历" in content
 
 
-def test_intro_treats_user_text_as_self_intro_and_starts_resume_technical_question():
+def test_intro_acknowledges_self_intro_without_asking_technical_question():
     content = build_system_messages(_state(stage="intro", current_question=None))[0].content
     assert "不要再次要求候选人自我介绍" in content
-    assert "简历" in content and "技术基础" in content
+    assert "不要提问" in content
+    assert "技术基础考点" not in content
+    assert "只承接自我介绍" in content
+
+
+def test_resume_is_wrapped_as_untrusted_data():
+    content = build_system_messages(_state())[0].content
+    assert '<untrusted_data source="resume">' in content
+    assert "秒杀系统" in content
+    assert "untrusted_data" in content
+    assert "候选人提供的数据" in content
 
 
 def test_build_system_messages_pinned_v1_differs_from_latest():
-    # P7：会话固化 1.0.0 时渲染 v1（无"提问约束"段）；默认取最新 v2（含）
+    # P7：会话固化 1.0.0 时渲染 v1（无"提问约束"段）；默认取最新（含）
     v1 = build_system_messages(
         _state(prompt_versions={"interviewer:system": "1.0.0"})
     )[0].content
@@ -99,9 +109,10 @@ def test_generate_stream_yields_chunks_in_order():
 
     import asyncio
     assert asyncio.run(run()) == ["你", "好"]
-    # 校验发往 LLM 的消息：system 在最前，末尾是本轮用户输入
+    # 校验发往 LLM 的消息：system 在最前，末尾是本轮用户输入（口述当 data）
     assert llm.messages_seen[0].type == "system"
-    assert llm.messages_seen[-1].content == "我准备好了"
+    assert "我准备好了" in llm.messages_seen[-1].content
+    assert '<untrusted_data source="utterance">' in llm.messages_seen[-1].content
 
 
 def test_generate_stream_error_yields_error_reply():
