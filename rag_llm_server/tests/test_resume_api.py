@@ -37,6 +37,14 @@ async def test_upload_over_limit_returns_413(monkeypatch):
     assert ei.value.status_code == 413
 
 
+async def test_markdown_upload_over_limit_returns_413(monkeypatch):
+    monkeypatch.setattr(resume_api, "MAX_UPLOAD_BYTES", 100)
+    with pytest.raises(HTTPException) as ei:
+        await resume_api.upload_resume("x" * 200, "md", TEST_USER)
+    assert ei.value.status_code == 413
+    assert "5MB" in str(ei.value.detail) or "limit" in str(ei.value.detail).lower()
+
+
 async def test_upload_not_pdf_returns_422():
     with pytest.raises(HTTPException) as ei:
         await resume_api.upload_resume_pdf(_upload(b"hello world"))
