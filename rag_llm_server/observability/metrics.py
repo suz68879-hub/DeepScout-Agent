@@ -43,7 +43,7 @@ def is_internal_metrics_client(host: str | None) -> bool:
         address = ipaddress.ip_address(host or "")
     except ValueError:
         return False
-    return address.is_loopback or address.is_private
+    return address.is_loopback
 
 
 class FirstTokenTimer:

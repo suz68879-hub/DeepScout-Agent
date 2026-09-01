@@ -48,6 +48,8 @@ async def upload_resume(
     source: str = Form("md"),
     user: dict = Depends(require_user_quota),
 ):
+    if len(content.encode("utf-8")) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail="file exceeds the 5MB limit")
     from services.agent_llm import get_agent_llm
 
     llm = get_agent_llm("resume_parser")

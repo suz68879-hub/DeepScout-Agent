@@ -17,9 +17,18 @@ def test_debug_routes_are_disabled_by_default(monkeypatch):
 
 def test_debug_routes_can_be_enabled(monkeypatch):
     monkeypatch.setattr(main.settings, "ENABLE_DEBUG_ROUTES", True)
+    monkeypatch.setattr(main.settings, "APP_ENV", "development", raising=False)
     paths = _paths(main.create_app())
     assert "/debug/chat" in paths
     assert "/debug/rag" in paths
+
+
+def test_debug_routes_stay_off_in_production(monkeypatch):
+    monkeypatch.setattr(main.settings, "ENABLE_DEBUG_ROUTES", True)
+    monkeypatch.setattr(main.settings, "APP_ENV", "production", raising=False)
+    paths = _paths(main.create_app())
+    assert "/debug/chat" not in paths
+    assert "/debug/rag" not in paths
 
 
 def test_public_job_query_route_is_registered():
@@ -33,6 +42,82 @@ def test_cors_uses_configured_origins_with_credentials(monkeypatch):
     middleware = next(item for item in app.user_middleware if item.cls is CORSMiddleware)
     assert middleware.kwargs["allow_origins"] == list(origins)
     assert middleware.kwargs["allow_credentials"] is True
+
+
+async def _post_start(client, **headers):
+    return await client.post(
+        "/api/interview/start",
+        headers=headers,
+        json={"position": "Backend"},
+    )
+
+
+async def test_cookie_write_without_origin_is_forbidden():
+    transport = httpx.ASGITransport(app=main.create_app())
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await _post_start(client, Cookie="interview_session=stolen")
+    assert response.status_code == 403
+    assert response.json() == {"detail": "origin not allowed"}
+
+
+async def test_cookie_write_with_allowlisted_origin_passes_origin_check(monkeypatch):
+    monkeypatch.setattr(
+        main.settings, "CORS_ORIGINS", ("http://localhost:3000",), raising=False,
+    )
+    transport = httpx.ASGITransport(app=main.create_app())
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await _post_start(
+            client,
+            Cookie="interview_session=stolen",
+            Origin="http://localhost:3000",
+        )
+    assert response.status_code != 403
+
+
+async def test_cookie_write_accepts_allowlisted_referer(monkeypatch):
+    monkeypatch.setattr(
+        main.settings, "CORS_ORIGINS", ("http://localhost:3000",), raising=False,
+    )
+    transport = httpx.ASGITransport(app=main.create_app())
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await _post_start(
+            client,
+            Cookie="interview_session=stolen",
+            Referer="http://localhost:3000/interview/s1",
+        )
+    assert response.status_code != 403
+
+
+async def test_cookie_write_rejects_foreign_origin(monkeypatch):
+    monkeypatch.setattr(
+        main.settings, "CORS_ORIGINS", ("http://localhost:3000",), raising=False,
+    )
+    transport = httpx.ASGITransport(app=main.create_app())
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await _post_start(
+            client,
+            Cookie="interview_session=stolen",
+            Origin="https://evil.example",
+        )
+    assert response.status_code == 403
+
+
+async def test_write_without_cookie_does_not_require_origin():
+    transport = httpx.ASGITransport(app=main.create_app())
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await _post_start(client)
+    assert response.status_code != 403
+
+
+async def test_chat_callback_without_origin_is_not_blocked_by_csrf():
+    transport = httpx.ASGITransport(app=main.create_app())
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/api/chat_callback",
+            json={"messages": []},
+            headers={"Cookie": "interview_session=stolen"},
+        )
+    assert response.status_code != 403 or response.json().get("detail") != "origin not allowed"
 
 
 async def test_liveness_does_not_check_redis(monkeypatch):
