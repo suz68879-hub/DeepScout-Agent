@@ -79,7 +79,9 @@ async def test_one_running_session_per_user_contract(repository_scope):
             alice["id"],
             {"position": "Backend", "stage": "intro", "status": "running"},
         )
-        with pytest.raises(StorageConflictError):
+
+    with pytest.raises(StorageConflictError):
+        async with scope() as repository:
             await repository.session_create(
                 alice["id"],
                 {"position": "Backend", "stage": "intro", "status": "running"},
