@@ -8,6 +8,7 @@ import {
   postFile,
   postForm,
   postJson,
+  abandonSession,
 } from './rest';
 import { AIGC_PROXY_HOST } from '@/config';
 
@@ -47,6 +48,20 @@ describe('rest client', () => {
     expect(init.method).toBe('POST');
     expect(JSON.parse(init.body)).toEqual({ position: 'Java后端' });
     expect(init.headers['Content-Type']).toBe('application/json');
+  });
+
+  it('abandonSession 以 keepalive POST 回收会话', async () => {
+    const fn = vi.fn().mockResolvedValue(okJson({ status: 'abandoned' }));
+    vi.stubGlobal('fetch', fn);
+    abandonSession('s1');
+    await vi.waitFor(() => expect(fn).toHaveBeenCalled());
+    const [url, init] = fn.mock.calls[0];
+    expect(url).toBe(`${AIGC_PROXY_HOST}/api/interview/abandon`);
+    expect(init.method).toBe('POST');
+    expect(init.keepalive).toBe(true);
+    expect(init.credentials).toBe('include');
+    expect(init.headers['Content-Type']).toBe('application/x-www-form-urlencoded');
+    expect(init.body).toBe('session_id=s1');
   });
 
   it('postForm 以 FormData 发送字段', async () => {

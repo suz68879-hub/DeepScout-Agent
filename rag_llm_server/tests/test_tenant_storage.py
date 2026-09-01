@@ -36,7 +36,7 @@ async def test_rtc_identifiers_are_unique_per_session(tmp_storage):
     storage = await tmp_storage()
     user = await storage.user_create("alice", hash_password("password-123"))
     first = await storage.session_create(user["id"], {
-        "resume_id": None, "position": "backend", "stage": "intro", "status": "running",
+        "resume_id": None, "position": "backend", "stage": "intro", "status": "abandoned",
     })
     second = await storage.session_create(user["id"], {
         "resume_id": None, "position": "backend", "stage": "intro", "status": "running",

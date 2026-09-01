@@ -185,6 +185,29 @@ class SqliteStorage(BaseStorage):
             CREATE UNIQUE INDEX IF NOT EXISTS idx_session_rtc_task ON interview_session(rtc_task_id);
             CREATE UNIQUE INDEX IF NOT EXISTS idx_session_rtc_callback ON interview_session(rtc_callback_id);
             """)
+            await conn.execute(
+                """
+                UPDATE interview_session
+                SET status = 'abandoned',
+                    ended_at = COALESCE(ended_at, datetime('now'))
+                WHERE status = 'running' AND id NOT IN (
+                    SELECT id FROM (
+                        SELECT id, ROW_NUMBER() OVER (
+                            PARTITION BY user_id ORDER BY started_at DESC, id DESC
+                        ) AS rn
+                        FROM interview_session
+                        WHERE status = 'running'
+                    ) ranked
+                    WHERE rn = 1
+                )
+                """
+            )
+            await conn.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS uq_interview_session_one_running_per_user
+                    ON interview_session(user_id) WHERE status = 'running'
+                """
+            )
             for table in _OWNER_TABLES:
                 row = await (await conn.execute(
                     f"SELECT COUNT(*) FROM {table} WHERE user_id IS NULL"
@@ -420,15 +443,19 @@ class SqliteStorage(BaseStorage):
         row.setdefault("rtc_fencing_token", 0)
         row.setdefault("version", 1)
         row["user_id"] = user_id
-        await self._c().execute(
-            "INSERT INTO interview_session (id, user_id, resume_id, position, stage, status, "
-            "started_at, ended_at, rtc_room_id, rtc_user_id, rtc_task_id, rtc_callback_id, "
-            "rtc_status, rtc_fencing_token, version) "
-            "VALUES (:id, :user_id, :resume_id, :position, :stage, :status, :started_at, :ended_at, "
-            ":rtc_room_id, :rtc_user_id, :rtc_task_id, :rtc_callback_id, :rtc_status, "
-            ":rtc_fencing_token, :version)", row,
-        )
-        await self._c().commit()
+        try:
+            await self._c().execute(
+                "INSERT INTO interview_session (id, user_id, resume_id, position, stage, status, "
+                "started_at, ended_at, rtc_room_id, rtc_user_id, rtc_task_id, rtc_callback_id, "
+                "rtc_status, rtc_fencing_token, version) "
+                "VALUES (:id, :user_id, :resume_id, :position, :stage, :status, :started_at, :ended_at, "
+                ":rtc_room_id, :rtc_user_id, :rtc_task_id, :rtc_callback_id, :rtc_status, "
+                ":rtc_fencing_token, :version)", row,
+            )
+            await self._c().commit()
+        except sqlite3.IntegrityError:
+            await self._c().rollback()
+            raise StorageConflictError("interview session constraint conflict") from None
         return row
 
     async def session_get(self, user_id: str, session_id: str) -> dict | None:
@@ -619,6 +646,13 @@ class SqliteStorage(BaseStorage):
 
     async def report_get(self, user_id: str, report_id: str) -> dict | None:
         return await self._owned_get("interview_report", user_id, report_id)
+
+    async def report_get_by_session(self, user_id: str, session_id: str) -> dict | None:
+        row = await (await self._c().execute(
+            "SELECT * FROM interview_report WHERE user_id = ? AND session_id = ?",
+            (user_id, session_id),
+        )).fetchone()
+        return dict(row) if row else None
 
     async def report_list(self, user_id: str) -> list[dict]:
         rows = await (await self._c().execute(

@@ -261,6 +261,32 @@ USER_CALLBACK = {
 }
 
 
+async def test_callback_abandons_expired_running_session(monkeypatch):
+    from datetime import datetime, timedelta, timezone
+
+    expired = {
+        **SESSION,
+        "started_at": (datetime.now(timezone.utc) - timedelta(hours=3)).isoformat(),
+    }
+    abandoned = []
+
+    async def get_session(_callback_id):
+        return expired
+
+    async def fake_abandon(user_id, session_id, session=None):
+        abandoned.append((user_id, session_id))
+        return {**(session or expired), "status": "abandoned"}
+
+    _patch_signed_callback(monkeypatch)
+    monkeypatch.setattr(rtc_api.storage, "session_get_by_callback", get_session)
+    monkeypatch.setattr(rtc_api.settings, "SESSION_MAX_SECONDS", 3600, raising=False)
+    monkeypatch.setattr(rtc_api, "abandon_session", fake_abandon, raising=False)
+    with pytest.raises(rtc_api.HTTPException) as exc_info:
+        await rtc_api.chat_callback(Request(USER_CALLBACK), "callback1")
+    assert exc_info.value.status_code == 404
+    assert abandoned == [("u1", "s1")]
+
+
 @pytest.mark.parametrize(
     "error",
     [

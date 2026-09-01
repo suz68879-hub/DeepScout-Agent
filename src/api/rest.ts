@@ -138,6 +138,16 @@ export function postJson<T>(path: string, body: unknown): Promise<T> {
   });
 }
 
+export function abandonSession(sessionId: string): void {
+  void fetch(`${BASE}/api/interview/abandon`, {
+    method: 'POST',
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ session_id: sessionId }).toString(),
+    keepalive: true,
+  }).catch(() => undefined);
+}
+
 export async function postForm<T>(path: string, form: Record<string, string>): Promise<T> {
   const fd = new FormData();
   Object.entries(form).forEach(([k, v]) => fd.append(k, v));

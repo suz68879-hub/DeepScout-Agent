@@ -44,8 +44,9 @@ _SCORES = [{
 }]
 
 
-def _mock(monkeypatch, session, values):
+def _mock(monkeypatch, session, values, report=None):
     monkeypatch.setattr(api.storage, "session_get", _ainvoke(session))
+    monkeypatch.setattr(api.storage, "report_get_by_session", _ainvoke(report))
     fake_graph = _FakeGraph(values)
     monkeypatch.setattr(api, "get_graph", lambda: fake_graph)
 
@@ -60,6 +61,8 @@ async def test_state_returns_stage_and_scores(monkeypatch):
     assert result["stage"] == "technical"
     assert result["round_no"] == 3
     assert result["scores"] == _SCORES
+    assert result["status"] == "running"
+    assert result["report_id"] is None
 
 
 async def test_state_404_when_session_missing(monkeypatch):
@@ -82,3 +85,16 @@ async def test_state_409_when_checkpoint_belongs_to_other_session(monkeypatch):
     with pytest.raises(HTTPException) as ei:
         await api.interview_state("s1", {"id": "u1"})
     assert ei.value.status_code == 409
+
+
+async def test_state_includes_report_id_when_finished(monkeypatch):
+    _mock(
+        monkeypatch,
+        _fake_session(status="finished", stage="finish"),
+        {"session_id": "s1", "stage": "finish", "round_no": 8, "current_question": None, "scores": []},
+        report={"id": "r1", "session_id": "s1"},
+    )
+    result = await api.interview_state("s1", {"id": "u1"})
+    assert result["status"] == "finished"
+    assert result["stage"] == "finish"
+    assert result["report_id"] == "r1"

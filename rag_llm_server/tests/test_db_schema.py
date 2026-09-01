@@ -42,6 +42,11 @@ def test_schema_has_required_uniqueness_and_owner_indexes():
     assert "lower" in str(user_indexes["uq_app_user_username_lower"].expressions[0]).lower()
 
     session = metadata.tables["interview_session"]
+    running_index = next(
+        index for index in session.indexes
+        if index.name == "uq_interview_session_one_running_per_user"
+    )
+    assert running_index.unique is True
     session_unique_names = {
         constraint.name
         for constraint in session.constraints
@@ -79,6 +84,7 @@ def test_schema_has_required_uniqueness_and_owner_indexes():
         "ix_interview_session_user_started_id",
         "ix_interview_report_user_created_id",
         "ix_recording_user_created_id",
+        "uq_interview_session_one_running_per_user",
     }
     actual_indexes = {
         index.name

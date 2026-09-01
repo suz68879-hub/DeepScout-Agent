@@ -82,6 +82,9 @@ export function installMockRoutes(
       json: { job_id: E2E_JOB_ID, session_id: E2E_SESSION_ID, status: 'pending' },
     });
   });
+  page.route('**/api/interview/abandon', (route) => {
+    void route.fulfill({ json: { session_id: E2E_SESSION_ID, status: 'abandoned' } });
+  });
 
   page.route(`**/api/jobs/${E2E_JOB_ID}`, (route) => {
     void route.fulfill({ json: {

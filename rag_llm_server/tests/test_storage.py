@@ -1,6 +1,7 @@
 """Storage CRUD and local file storage tests."""
 import pytest
 
+from services.storage.base import StorageConflictError
 from services.storage.file_storage import LocalFileStorage
 from services.storage.sqlite import SqliteStorage
 
@@ -55,6 +56,12 @@ async def test_session_running_filter(storage):
     assert [item["id"] for item in running] == [running_session["id"]]
 
 
+async def test_second_running_session_conflicts(storage):
+    await create_session(storage)
+    with pytest.raises(StorageConflictError):
+        await create_session(storage)
+
+
 async def test_session_update(storage):
     session = await create_session(storage)
     updated = await storage.session_update(
@@ -65,6 +72,7 @@ async def test_session_update(storage):
 
 async def test_message_seq_autoincrement(storage):
     first = await create_session(storage)
+    await storage.session_update(storage.test_user_id, first["id"], {"status": "abandoned"})
     second = await create_session(storage)
     user_id = storage.test_user_id
     await storage.message_append(user_id, first["id"], "user", "hello")
@@ -88,6 +96,7 @@ async def test_report_crud(storage):
         },
     )
     assert (await storage.report_get(user_id, report["id"]))["session_id"] == session["id"]
+    assert (await storage.report_get_by_session(user_id, session["id"]))["id"] == report["id"]
     assert len(await storage.report_list(user_id)) == 1
 
 

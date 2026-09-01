@@ -10,7 +10,7 @@ def _fake_session(status="running", **extra):
     s = {
         "id": "s1", "resume_id": None, "position": "Java后端", "stage": "intro",
         "status": status, "started_at": "2026-01-01T00:00:00", "ended_at": None,
-        "user_id": "u1",
+        "user_id": "u1", "version": 1,
     }
     s.update(extra)
     return s
@@ -20,6 +20,15 @@ def _ainvoke(result):
     async def f(*args, **kwargs):
         return result
     return f
+
+
+class _JsonRequest:
+    def __init__(self, session_id: str):
+        self.headers = {"content-type": "application/json"}
+        self._session_id = session_id
+
+    async def json(self):
+        return {"session_id": self._session_id}
 
 
 class _FakeGraph:
@@ -83,6 +92,13 @@ async def test_finish_returns_202_durable_job_contract(monkeypatch):
         return Job()
 
     monkeypatch.setattr(api, "schedule_finish_job", schedule, raising=False)
+    finishing = []
+
+    async def session_update(_user_id, session_id, patch, expected_version=None):
+        finishing.append((session_id, patch, expected_version))
+        return {**session, **patch, "version": 2}
+
+    monkeypatch.setattr(api.storage, "session_update", session_update)
 
     result = await api.finish_interview(
         api.FinishRequest(session_id="s1"), {"id": "u1"}
@@ -93,6 +109,7 @@ async def test_finish_returns_202_durable_job_contract(monkeypatch):
         "session_id": "s1",
         "status": "pending",
     }
+    assert finishing == [("s1", {"status": "finishing"}, 1)]
     assert fake_graph.updates[-1][1:] == ({"stage": "finish"}, {"as_node": "planner"})
 
 
@@ -113,6 +130,7 @@ async def test_start_scopes_idempotency_to_validated_body(monkeypatch):
         captured.update({"request": request, "user": user, "body": body})
         return await operation()
 
+    monkeypatch.setattr(api.storage, "session_list_running", _ainvoke([]))
     monkeypatch.setattr(api.storage, "session_create", session_create)
     monkeypatch.setattr(api, "get_graph", lambda: _FakeGraph({}))
     monkeypatch.setattr(api, "execute_idempotent", fake_execute, raising=False)
@@ -191,3 +209,75 @@ async def test_finish_updates_stage_with_as_node_planner(monkeypatch):
     assert len(fake.updates) == 1
     assert fake.updates[0][1] == {"stage": "finish"}
     assert fake.updates[0][2] == {"as_node": "planner"}
+
+
+async def test_start_reclaims_existing_running_then_creates(monkeypatch):
+    running = [_fake_session(id="old")]
+    updates = []
+
+    async def list_running(_user_id):
+        return list(running)
+
+    async def session_update(_user_id, session_id, patch, expected_version=None):
+        updates.append((session_id, patch))
+        running.clear()
+        return {**_fake_session(id=session_id), **patch}
+
+    async def session_create(_user_id, row):
+        return {**row, "id": "s-new"}
+
+    monkeypatch.setattr(api.storage, "session_list_running", list_running)
+    monkeypatch.setattr(api.storage, "session_get", _ainvoke(_fake_session(id="old")))
+    monkeypatch.setattr(api.storage, "session_update", session_update)
+    monkeypatch.setattr(api.storage, "session_create", session_create)
+    monkeypatch.setattr(api, "get_graph", lambda: _FakeGraph({}))
+
+    result = await api.start_interview(
+        api.StartRequest(position="Backend"), {"id": "u1"}
+    )
+    assert result == {"session_id": "s-new", "position": "Backend", "stage": "intro"}
+    assert updates == [("old", {"status": "abandoned", "ended_at": updates[0][1]["ended_at"]})]
+    assert updates[0][1]["status"] == "abandoned"
+    assert updates[0][1]["ended_at"]
+
+
+async def test_abandon_marks_running_session_without_report(monkeypatch):
+    updates = []
+
+    async def session_get(_user_id, session_id):
+        return _fake_session(id=session_id)
+
+    async def session_update(_user_id, session_id, patch, expected_version=None):
+        updates.append(patch)
+        return {**_fake_session(id=session_id), **patch}
+
+    monkeypatch.setattr(api.storage, "session_get", session_get)
+    monkeypatch.setattr(api.storage, "session_update", session_update)
+    result = await api.abandon_interview(_JsonRequest("s1"), {"id": "u1"})
+    assert result["session_id"] == "s1"
+    assert result["status"] == "abandoned"
+    assert updates[0]["status"] == "abandoned"
+    assert updates[0]["ended_at"]
+
+
+async def test_abandon_is_noop_when_already_finished(monkeypatch):
+    updates = []
+    monkeypatch.setattr(
+        api.storage, "session_get", _ainvoke(_fake_session(status="finished"))
+    )
+
+    async def session_update(*_args, **_kwargs):
+        updates.append(True)
+        raise AssertionError("finished session must not be patched")
+
+    monkeypatch.setattr(api.storage, "session_update", session_update)
+    result = await api.abandon_interview(_JsonRequest("s1"), {"id": "u1"})
+    assert result["status"] == "finished"
+    assert updates == []
+
+
+async def test_abandon_404_when_session_missing(monkeypatch):
+    monkeypatch.setattr(api.storage, "session_get", _ainvoke(None))
+    with pytest.raises(HTTPException) as ei:
+        await api.abandon_interview(_JsonRequest("ghost"), {"id": "u1"})
+    assert ei.value.status_code == 404

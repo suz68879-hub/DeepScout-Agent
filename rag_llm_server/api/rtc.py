@@ -16,9 +16,11 @@ from services.interview_service import (
     HOT_PATH_COLD_WAIT_SECONDS,
     ColdPathStateError,
     _restore_state,
+    abandon_session,
     await_pending_cold,
     schedule_cold_path,
     session_config,
+    session_expired,
     readiness_gate_reply,
     sse_chunk,
 )
@@ -134,6 +136,9 @@ async def chat_callback(request: Request, rtc_callback_id: str | None = None):
 
     session = await storage.session_get_by_callback(rtc_callback_id)
     if not session or session.get("status") != "running":
+        raise HTTPException(status_code=404, detail="interview session not found")
+    if session_expired(session):
+        await abandon_session(session["user_id"], session["id"], session)
         raise HTTPException(status_code=404, detail="interview session not found")
     messages = body.get("messages", [])
     if (
