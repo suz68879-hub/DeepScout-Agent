@@ -1,11 +1,16 @@
 """RTC router compatibility tests for explicit interview sessions."""
 import json
+from contextlib import asynccontextmanager
 
 import pytest
 
 import api.rtc as rtc_api
+import services.interview_service as isv
+from agents.interviewer import ERROR_REPLY
 from services.distributed_lock import LockBusy, LockLost
+from services.interview_service import ColdPathStateError
 from services.redis_client import SharedStateUnavailable
+from services.rtc_service import RTC_LOCK_WAIT_SECONDS
 
 
 USER = {"id": "u1", "username": "alice"}
@@ -165,3 +170,152 @@ async def test_callback_rejects_non_object_json_body(monkeypatch):
     response = await rtc_api.chat_callback(Request(["not", "an", "object"]), "callback1")
     assert response.status_code == 403
     assert json.loads(response.body) == {"text": "signature verification failed"}
+
+
+class RecordingLock:
+    def __init__(self, error=None):
+        self.error = error
+        self.calls = []
+
+    @asynccontextmanager
+    async def lease_wait(self, resource_id, *, timeout):
+        self.calls.append((resource_id, timeout))
+        if self.error is not None:
+            raise self.error
+        yield object()
+
+
+async def sse_body(response) -> str:
+    parts = []
+    async for chunk in response.body_iterator:
+        parts.append(chunk.decode() if isinstance(chunk, bytes) else chunk)
+    return "".join(parts)
+
+
+def _patch_signed_callback(monkeypatch, *, lock=None):
+    monkeypatch.setattr(rtc_api.settings, "RTC_CALLBACK_SECRET", "secret")
+    monkeypatch.setattr(rtc_api, "verify_callback", lambda *_args, **_kwargs: True)
+
+    async def claimed(_event_id):
+        return True
+
+    monkeypatch.setattr(rtc_api, "claim_callback_replay", claimed)
+    monkeypatch.setattr(
+        rtc_api.storage, "session_get_by_callback", lambda *_args: async_value(SESSION),
+    )
+    monkeypatch.setattr(rtc_api, "get_rtc_lock", lambda: lock or RecordingLock())
+
+
+USER_CALLBACK = {
+    "Signature": "ok",
+    "EventId": "evt-hot",
+    "EventTime": "1700000000",
+    "messages": [{"role": "user", "content": "你好"}],
+}
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        ColdPathStateError("PREVIOUS_COLD_PATH_FAILED"),
+        ColdPathStateError("PREVIOUS_COLD_PATH_PENDING"),
+    ],
+)
+async def test_callback_speaks_error_when_cold_path_blocks_hot_path(monkeypatch, error):
+    waits = []
+    lock = RecordingLock()
+    _patch_signed_callback(monkeypatch, lock=lock)
+
+    async def blocked(session_id, timeout=None, **_kwargs):
+        waits.append((session_id, timeout))
+        raise error
+
+    monkeypatch.setattr(rtc_api, "await_pending_cold", blocked)
+    response = await rtc_api.chat_callback(Request(USER_CALLBACK), "callback1")
+    body = await sse_body(response)
+    assert ERROR_REPLY in body
+    assert "data: [DONE]" in body
+    assert waits == [("s1", isv.HOT_PATH_COLD_WAIT_SECONDS)]
+    assert lock.calls == [("s1", RTC_LOCK_WAIT_SECONDS)]
+
+
+@pytest.mark.parametrize(
+    "error",
+    [LockBusy("busy"), LockLost("lost"), SharedStateUnavailable("down")],
+)
+async def test_callback_speaks_error_when_session_lock_unavailable(monkeypatch, error):
+    lock = RecordingLock(error=error)
+    _patch_signed_callback(monkeypatch, lock=lock)
+    cold_calls = []
+
+    async def forbidden(*_args, **_kwargs):
+        cold_calls.append(True)
+        raise AssertionError("locked callback must not wait on cold path")
+
+    monkeypatch.setattr(rtc_api, "await_pending_cold", forbidden)
+    response = await rtc_api.chat_callback(Request(USER_CALLBACK), "callback1")
+    body = await sse_body(response)
+    assert ERROR_REPLY in body
+    assert "data: [DONE]" in body
+    assert lock.calls == [("s1", RTC_LOCK_WAIT_SECONDS)]
+    assert cold_calls == []
+
+
+async def test_callback_speaks_error_when_hot_path_raises(monkeypatch):
+    _patch_signed_callback(monkeypatch, lock=RecordingLock())
+
+    async def ready(*_args, **_kwargs):
+        return None
+
+    async def boom(*_args, **_kwargs):
+        raise RuntimeError("checkpoint exploded")
+
+    monkeypatch.setattr(rtc_api, "await_pending_cold", ready)
+    monkeypatch.setattr(rtc_api, "_restore_state", boom)
+    response = await rtc_api.chat_callback(Request(USER_CALLBACK), "callback1")
+    body = await sse_body(response)
+    assert ERROR_REPLY in body
+    assert "data: [DONE]" in body
+
+
+class FakeGraph:
+    async def aupdate_state(self, *_args, **_kwargs):
+        return None
+
+
+async def _ready(*_args, **_kwargs):
+    return None
+
+
+async def _intro_state(_session):
+    return {"stage": "intro", "round_no": 0, "messages": []}
+
+
+async def test_callback_gate_reply_does_not_append_error_chunk(monkeypatch):
+    _patch_signed_callback(monkeypatch, lock=RecordingLock())
+    monkeypatch.setattr(rtc_api, "await_pending_cold", _ready)
+    monkeypatch.setattr(rtc_api, "_restore_state", _intro_state)
+    monkeypatch.setattr(rtc_api, "get_graph", lambda: FakeGraph())
+    response = await rtc_api.chat_callback(Request(USER_CALLBACK), "callback1")
+    body = await sse_body(response)
+    assert isv.WAITING_PROMPT in body
+    assert ERROR_REPLY not in body
+    assert body.count("data: [DONE]") == 1
+
+
+async def test_callback_does_not_speak_error_when_lock_release_fails(monkeypatch):
+    class ExitFailLock:
+        @asynccontextmanager
+        async def lease_wait(self, resource_id, *, timeout):
+            yield object()
+            raise LockLost("lost on exit")
+
+    _patch_signed_callback(monkeypatch, lock=ExitFailLock())
+    monkeypatch.setattr(rtc_api, "await_pending_cold", _ready)
+    monkeypatch.setattr(rtc_api, "_restore_state", _intro_state)
+    monkeypatch.setattr(rtc_api, "get_graph", lambda: FakeGraph())
+    response = await rtc_api.chat_callback(Request(USER_CALLBACK), "callback1")
+    body = await sse_body(response)
+    assert isv.WAITING_PROMPT in body
+    assert ERROR_REPLY not in body
+    assert body.count("data: [DONE]") == 1
