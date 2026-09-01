@@ -77,6 +77,9 @@ export const requestPostMethod = ({
  */
 export const resultHandler = (res: RequestResponse) => {
   const { Result, ResponseMetadata } = res || {};
+  if (!ResponseMetadata) {
+    throw new Error(res?.detail || '请求失败，请稍后重试');
+  }
   // Record request id for debug.
   if (ResponseMetadata.Action === 'StartVoiceChat') {
     const requestId = ResponseMetadata.RequestId;

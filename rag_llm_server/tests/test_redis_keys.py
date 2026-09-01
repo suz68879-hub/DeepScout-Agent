@@ -9,6 +9,7 @@ from services.redis_keys import (
     REGISTER_WINDOW_SECONDS,
     RTC_LEASE_SECONDS,
     RTC_RENEW_SECONDS,
+    CALLBACK_REPLAY_TTL_SECONDS,
     RedisDataError,
     auth_session_key,
     decode_payload,
@@ -18,6 +19,7 @@ from services.redis_keys import (
     register_rate_limit_key,
     rtc_fence_key,
     rtc_lock_key,
+    callback_replay_key,
     session_cache_ttl,
     validate_ttl,
 )
@@ -41,6 +43,7 @@ def test_keys_are_environment_isolated_and_contain_no_plain_identifiers():
         register_rate_limit_key("test", raw_values[1]),
         rtc_lock_key("test", raw_values[3]),
         rtc_fence_key("test", raw_values[3]),
+        callback_replay_key("test", "event-id-1"),
         idempotency_record_key("test", "user-1", "POST", "/api/interview", raw_values[4]),
     ]
 
@@ -48,7 +51,7 @@ def test_keys_are_environment_isolated_and_contain_no_plain_identifiers():
     assert len(set(keys)) == len(keys)
     for key in keys:
         assert key.startswith("deepscout:test:")
-        assert all(value not in key for value in raw_values)
+        assert all(value not in key for value in (*raw_values, "event-id-1"))
 
 
 @pytest.mark.parametrize("app_env", ["", "staging", "test:other"])
@@ -70,6 +73,7 @@ def test_locked_ttl_values_and_session_cap():
     assert RTC_LEASE_SECONDS == 30
     assert RTC_RENEW_SECONDS == 10
     assert IDEMPOTENCY_TTL_SECONDS == 24 * 60 * 60
+    assert CALLBACK_REPLAY_TTL_SECONDS == 660
     assert session_cache_ttl(15.9) == 15
     assert session_cache_ttl(8 * 24 * 60 * 60) == 7 * 24 * 60 * 60
 

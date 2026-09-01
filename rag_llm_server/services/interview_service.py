@@ -24,13 +24,37 @@ from services.storage import storage
 from services.storage.postgres import PostgresRepository
 
 DEFAULT_POSITION = "Java后端"
+READINESS_PROMPT = "你好，我是今天的面试官懂小智。正式开始前，请问你准备好了吗？"
+SELF_INTRO_PROMPT = "好的，下面请进行一分钟左右的自我介绍。"
+WAITING_PROMPT = "好的，你准备好后告诉我“我准备好了”，我们再开始。"
 logger = logging.getLogger(__name__)
 
 
 def build_welcome_message(state: dict) -> str:
     """RTC 入房后主动播报的开场白；不调用 LLM，避免首屏等待。"""
     position = state.get("position") or DEFAULT_POSITION
-    return f"你好，我是今天的面试官懂小智，负责你的{position}面试。请先用一分钟做一下自我介绍。"
+    return f"你好，我是今天的面试官懂小智，负责你的{position}面试。正式开始前，请问你准备好了吗？"
+
+
+def _message_content(message: object) -> str:
+    if isinstance(message, dict):
+        return str(message.get("content", ""))
+    return str(getattr(message, "content", ""))
+
+
+def readiness_gate_reply(state: dict, user_text: str) -> str | None:
+    """在 intro 首轮增加确定性的准备确认，不把确认语误当作自我介绍。"""
+    if state.get("stage") != "intro" or state.get("round_no", 0) != 0:
+        return None
+    if any(SELF_INTRO_PROMPT in _message_content(message) for message in state.get("messages", [])):
+        return None
+
+    normalized = "".join(str(user_text).lower().split())
+    negative_phrases = ("没准备好", "没有准备好", "还没", "等一下", "稍等", "等等")
+    if any(phrase in normalized for phrase in negative_phrases):
+        return WAITING_PROMPT
+    ready_phrases = ("准备好了", "我准备好", "可以开始", "开始吧", "ready")
+    return SELF_INTRO_PROMPT if any(phrase in normalized for phrase in ready_phrases) else WAITING_PROMPT
 
 
 def session_config(session_id: str) -> dict:

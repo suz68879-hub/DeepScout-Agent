@@ -16,6 +16,7 @@ from services.utils import Signer
 
 AGENT_USER_ID = "AiAgent"
 RTC_LOCK_WAIT_SECONDS = 2.0
+ALLOWED_VOICE_CHAT_ACTIONS = frozenset({"StartVoiceChat", "StopVoiceChat"})
 
 
 class RTCConfigurationError(RuntimeError):
@@ -184,6 +185,8 @@ async def call_voice_chat_openapi(
     session: dict,
     incoming_body: Any,
 ) -> dict[str, Any]:
+    if action not in ALLOWED_VOICE_CHAT_ACTIONS:
+        raise ValueError("unsupported RTC action")
     if action == "StartVoiceChat" and session.get("rtc_status") == "running":
         return _idempotent_response("StartVoiceChat", "running")
     if action == "StopVoiceChat" and session.get("rtc_status") in {"created", "stopped"}:

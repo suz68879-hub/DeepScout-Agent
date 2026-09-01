@@ -14,6 +14,7 @@ REGISTER_WINDOW_SECONDS = 60 * 60
 RTC_LEASE_SECONDS = 30
 RTC_RENEW_SECONDS = 10
 IDEMPOTENCY_TTL_SECONDS = 24 * 60 * 60
+CALLBACK_REPLAY_TTL_SECONDS = 660
 _APP_ENVS = {"development", "test", "production"}
 
 
@@ -56,6 +57,10 @@ def rtc_lock_key(app_env: str, session_id: str) -> str:
 
 def rtc_fence_key(app_env: str, session_id: str) -> str:
     return _hashed_key(app_env, "rtc", "fence", session_id)
+
+
+def callback_replay_key(app_env: str, event_id: str) -> str:
+    return _hashed_key(app_env, "rtc", "callback-replay", event_id)
 
 
 def idempotency_record_key(
