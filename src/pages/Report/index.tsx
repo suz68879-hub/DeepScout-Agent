@@ -6,6 +6,7 @@ import ChartPanel from '@/components/ChartPanel';
 import { radarOption, roundBarOption } from '@/components/ChartPanel/options';
 import type { ReportRow } from '@/domain/report/types';
 import { overallFromReport, parseFeedback, parseScores } from '@/domain/report/types';
+import { formatLocalDateTime } from '@/lib/datetime';
 import styles from './index.module.less';
 
 function parseSuggestions(json: string | null): string[] {
@@ -72,7 +73,7 @@ export default function ReportPage() {
           <h1 className={styles.title}>
             <span className={styles.prompt}>$</span> 面试报告 — {report.position ?? '未知岗位'}
           </h1>
-          <div className={styles.meta}>{report.created_at.slice(0, 16).replace('T', ' ')}</div>
+          <div className={styles.meta}>{formatLocalDateTime(report.created_at)}</div>
         </div>
         <Button className={styles.exportBtn} loading={exporting} onClick={exportMd}>
           导出 MD

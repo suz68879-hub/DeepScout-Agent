@@ -17,7 +17,10 @@ const okJson = (body: unknown) =>
 const errJson = (status: number, detail: string) =>
   new Response(JSON.stringify({ detail }), { status, headers: { 'Content-Type': 'application/json' } });
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  vi.useRealTimers();
+  vi.unstubAllGlobals();
+});
 
 describe('rest client', () => {
   it('sends cookies with requests', async () => {
@@ -48,6 +51,9 @@ describe('rest client', () => {
     expect(init.method).toBe('POST');
     expect(JSON.parse(init.body)).toEqual({ position: 'Java后端' });
     expect(init.headers['Content-Type']).toBe('application/json');
+    expect(init.headers['Idempotency-Key']).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+    );
   });
 
   it('abandonSession 以 keepalive POST 回收会话', async () => {
@@ -140,6 +146,32 @@ describe('rest client', () => {
     await vi.advanceTimersByTimeAsync(2000);
     await rejected;
     expect(jobErrorMessage('MODEL_PROVIDER_SECRET_DETAIL')).toBe('任务处理失败，请稍后重试');
+    vi.useRealTimers();
+  });
+
+  it('轮询超过 120 秒仍未终态时抛出超时，避免浮层挂死', async () => {
+    vi.useFakeTimers();
+    const fn = vi.fn().mockImplementation(() => Promise.resolve(okJson({
+      job_id: 'job-1',
+      type: 'interview_finish',
+      status: 'pending',
+      attempt: 1,
+      created_at: '2026-08-26T10:00:00+00:00',
+      started_at: null,
+      finished_at: null,
+      result_ref: null,
+      error_code: null,
+    })));
+    vi.stubGlobal('fetch', fn);
+
+    const result = pollJob('job-1');
+    const rejected = expect(result).rejects.toMatchObject({
+      name: 'ApiError',
+      status: 408,
+      message: '报告生成超时，请稍后在历史记录中查看',
+    });
+    await vi.advanceTimersByTimeAsync(120_000);
+    await rejected;
     vi.useRealTimers();
   });
 });
