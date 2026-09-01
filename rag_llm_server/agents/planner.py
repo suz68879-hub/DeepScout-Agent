@@ -10,6 +10,7 @@ from langchain_core.messages import HumanMessage
 from pydantic import BaseModel
 
 from .prompts.registry import registry, render_structured
+from .untrusted import UNTRUSTED_DATA_RULE, wrap_untrusted
 
 # 兜底题库（agent-designs §2.7）：LLM 失败时按阶段顺序取未出过的题
 FALLBACK_QUESTIONS = {
@@ -123,10 +124,12 @@ async def generate_question(state: dict, rag_context: str = "", llm=None) -> Que
     template = registry.get_pinned("planner", "system", state)
     examples = yaml.dump(registry.get_examples_pinned("planner", "examples", state), allow_unicode=True)
     rag = rag_context or "本题无参考要点，按通用标准出题"
-    content = render_structured(template, Question, {
+    content = UNTRUSTED_DATA_RULE + "\n\n" + render_structured(template, Question, {
         "position": state.get("position", "Java后端"),
         "stage": state.get("stage", "technical"),
-        "resume_json": json.dumps(state.get("resume") or {}, ensure_ascii=False),
+        "resume_json": wrap_untrusted(
+            "resume", json.dumps(state.get("resume") or {}, ensure_ascii=False)
+        ),
         "asked_questions": json.dumps(
             [q.get("question_text") for q in state.get("questions_asked", [])],
             ensure_ascii=False,

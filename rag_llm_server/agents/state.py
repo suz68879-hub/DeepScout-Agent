@@ -23,3 +23,4 @@ class InterviewState(TypedDict, total=False):
     pending_user_text: str     # 热路径写入的当轮用户文本
     report: dict | None        # Reporter 产物（finish 后非空）
     prompt_versions: dict      # 会话创建时固化的提示词版本快照（agent-designs §0.5：会话中途改提示词不影响进行中会话）
+    pending_ask: bool          # planner 刚出题、尚未向候选人宣读；下一冷路径不评分、不再出题

@@ -11,6 +11,7 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from observability.metrics import service_metrics
 
 from .prompts.registry import registry
+from .untrusted import UNTRUSTED_DATA_RULE, wrap_untrusted
 
 logger = logging.getLogger(__name__)
 
@@ -18,7 +19,7 @@ WINDOW_SIZE = 10  # 最近 10 条 user/assistant 消息（agent-designs §1.4）
 
 # 阶段指令块（agent-designs §1.6 表，随阶段注入 system 消息）
 STAGE_INSTRUCTIONS = {
-    "intro": "当前阶段：开场。系统欢迎语已经请候选人做自我介绍，本轮用户发言就是候选人的自我介绍。请简短承接，并立即从简历技能中选择一个与岗位相关的技术基础考点提问；不要再次要求候选人自我介绍。",
+    "intro": "当前阶段：开场。系统欢迎语已经请候选人做自我介绍，本轮用户发言就是候选人的自我介绍。请用一两句简短承接，不要提问，不要开始技术考察；下一题由系统给出。不要再次要求候选人自我介绍。",
     "deepdive": "当前阶段：项目深挖。围绕候选人的项目经历提问，每个项目从背景、难点、技术取舍、数据成果四个角度展开；单点连续追问至少 2 轮再换点；同一项目深挖充分后转向「如果让你重新设计/扩展」场景设计题。",
     "technical": "当前阶段：技术基础。按系统给出的、源自候选人简历技能的题目提问，从基础原理到实际应用逐步加深。候选人答完一道后等待系统出下一题。",
     "qa": "当前阶段：候选人反问。你以真实面试官身份回答候选人的问题，简洁专业。",
@@ -58,15 +59,20 @@ def _resume_brief(resume: dict) -> str:
 def build_system_messages(state: dict) -> list[SystemMessage]:
     """拼装系统消息：人设模板 + 简历要点 + 阶段指令 + 当前题目（agent-designs §1.2）。"""
     question = state.get("current_question") or {}
-    question_text = question.get("question_text") or "（暂无，按当前阶段自由主持）"
-    hints = question.get("follow_up_hints") or []
-    if hints:
-        # P7：承接 planner 的追问提示（前 2 条），支撑单点深挖
-        question_text += "\n追问提示：" + "；".join(hints[:2])
+    if question.get("question_text"):
+        question_text = question["question_text"]
+        hints = question.get("follow_up_hints") or []
+        if hints:
+            # P7：承接 planner 的追问提示（前 2 条），支撑单点深挖
+            question_text += "\n追问提示：" + "；".join(hints[:2])
+    elif state.get("stage") == "intro":
+        question_text = "（本轮无题目，只承接自我介绍，不要提问）"
+    else:
+        question_text = "（暂无，按当前阶段自由主持）"
     template = registry.get_pinned("interviewer", "system", state)
-    content = template.render(
+    content = UNTRUSTED_DATA_RULE + "\n\n" + template.render(
         position=state.get("position", "Java后端"),
-        resume_brief=_resume_brief(state.get("resume") or {}),
+        resume_brief=wrap_untrusted("resume", _resume_brief(state.get("resume") or {})),
         stage_instruction=STAGE_INSTRUCTIONS.get(
             state.get("stage", "intro"), STAGE_INSTRUCTIONS["intro"]
         ),
@@ -91,7 +97,9 @@ async def generate_stream(state: dict, user_text: str, llm) -> AsyncIterator[str
         history.append({"role": "user", "content": user_text})
         msgs = build_system_messages(state)
         msgs += [
-            HumanMessage(content=m["content"]) if m["role"] == "user" else AIMessage(content=m["content"])
+            HumanMessage(content=wrap_untrusted("utterance", m["content"]))
+            if m["role"] == "user"
+            else AIMessage(content=m["content"])
             for m in trim_window(history)
         ]
         yielded = False

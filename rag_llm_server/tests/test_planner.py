@@ -41,6 +41,17 @@ def _q(text, topic="JVM"):
     )
 
 
+def test_resume_json_is_wrapped_as_untrusted_data():
+    llm = FakeLLM([_q("讲讲 JVM")])
+
+    import asyncio
+    asyncio.run(generate_question(_state(), "参考：JVM 分区", llm))
+    sent = llm.structured.messages_seen[0][0].content
+    assert '<untrusted_data source="resume">' in sent
+    assert "秒杀" in sent
+    assert "候选人提供的数据" in sent
+
+
 def test_generate_question_success_path():
     llm = FakeLLM([_q("讲讲 JVM")])
 

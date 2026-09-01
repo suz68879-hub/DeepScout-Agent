@@ -374,8 +374,8 @@ async def test_run_cold_path_reconciles_stage_after_checkpoint_only_crash(
     assert updates == [(str(owner_id), {"stage": "deepdive"}, 7)]
 
 
-async def test_restore_state_initializes_all_14_fields(monkeypatch):
-    """新会话 _restore_state 写入 InterviewState 全部 14 字段（R-T15-2 + P7 prompt_versions）。
+async def test_restore_state_initializes_all_15_fields(monkeypatch):
+    """新会话 _restore_state 写入 InterviewState 全部 15 字段（R-T15-2 + P7 prompt_versions）。
 
     沿用 test_chat_callback 的消费方绑定 patch 模式：patch 使用方模块
     services.interview_service 的 graph / storage 绑定，不 patch 源模块属性。
@@ -411,7 +411,7 @@ async def test_restore_state_initializes_all_14_fields(monkeypatch):
     expected = {
         "session_id", "position", "resume", "stage", "round_no", "stage_questions",
         "questions_asked", "current_question", "messages", "scores",
-        "rag_context", "pending_user_text", "report", "prompt_versions",
+        "rag_context", "pending_user_text", "report", "prompt_versions", "pending_ask",
     }
     assert set(state) == expected
     assert state["session_id"] == "s-restore"

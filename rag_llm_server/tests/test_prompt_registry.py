@@ -34,8 +34,12 @@ def test_template_count():
     # 8 个 md 模板 name（interviewer/planner/evaluator/reporter/resume_parser/text2sql + recording_analyzer 的 system/role_judge）
     assert set(registry._templates) == MD_NAMES
     for name in MD_NAMES:
-        # P7：全部 8 个模板已升 v2（1.0.0 保留为历史版本）
-        assert set(registry._templates[name]) == {"1.0.0", "2.0.0"}, f"{name} 版本集合异常"
+        versions = set(registry._templates[name])
+        assert {"1.0.0", "2.0.0"} <= versions, f"{name} 版本集合异常"
+        if name == "interviewer:system":
+            assert versions == {"1.0.0", "2.0.0", "3.0.0"}
+        else:
+            assert versions == {"1.0.0", "2.0.0"}
 
 
 def test_yaml_examples_are_versioned():
@@ -46,7 +50,7 @@ def test_yaml_examples_are_versioned():
 def test_get_with_version_returns_specific_template():
     t = registry.get("interviewer", "system", "1.0.0")
     assert t.version == "1.0.0"
-    assert registry.get("interviewer", "system").version == "2.0.0"  # 缺省取最新
+    assert registry.get("interviewer", "system").version == "3.0.0"  # 缺省取最新
     assert registry.get("interviewer", "system", "2.0.0").body != t.body
 
 
@@ -65,7 +69,8 @@ def test_snapshot_versions_returns_latest_per_name():
     snap = registry.snapshot_versions()
     assert set(snap) == MD_NAMES | {"planner:examples", "text2sql:examples",
                                     "evaluator:rubric", "evaluator:anchors"}
-    assert all(v == "2.0.0" for n, v in snap.items() if n in MD_NAMES)  # md 已全升 v2
+    assert snap["interviewer:system"] == "3.0.0"
+    assert all(v == "2.0.0" for n, v in snap.items() if n in MD_NAMES and n != "interviewer:system")
     assert all(v == "1.0.0" for n, v in snap.items() if n not in MD_NAMES)  # yaml 未升
 
 
@@ -82,6 +87,12 @@ def test_interviewer_v2_versions_diverge():
     latest = registry.get("interviewer", "system")
     if latest.version != "1.0.0":
         assert v1.body != latest.body
+
+
+def test_intro_never_advances_technical_question_in_latest_prompt():
+    body = registry.get("interviewer", "system").body
+    assert "不要开始技术提问" in body or "不要提问技术题" in body
+    assert "开始简历技术基础提问" not in body
 
 
 def test_interviewer_v2_has_resume_anchor_rule():

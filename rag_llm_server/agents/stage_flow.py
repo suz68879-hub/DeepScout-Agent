@@ -12,6 +12,9 @@ NEXT_STAGE = {"intro": "technical", "technical": "deepdive", "deepdive": "qa", "
 # 需要 Planner 出题的阶段（intro 开场白、qa 反问、finish 收尾均不出题）
 PLANNING_STAGES = ("deepdive", "technical")
 
+# intro 自我介绍、qa 反问、finish 收尾均不评分（M4：intro 对着空题打分）
+UNSCORED_STAGES = ("intro", "qa", "finish")
+
 
 def maybe_advance_stage(stage: str, round_no: int, project_count: int = 1) -> str | None:
     """判断当前阶段是否推进；返回下一阶段名，不推进返回 None。

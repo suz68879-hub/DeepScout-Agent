@@ -10,6 +10,7 @@ from langchain_core.messages import HumanMessage
 from pydantic import BaseModel, Field
 
 from .prompts.registry import registry, render_structured
+from .untrusted import UNTRUSTED_DATA_RULE, wrap_untrusted
 
 DIMENSIONS = ["技术深度", "项目理解", "表达沟通", "临场表现"]
 MIN_SCORE, MAX_SCORE = 1, 10
@@ -69,11 +70,11 @@ async def evaluate_round(
         merged.append(rag_context)
     if not merged:
         merged = ["本题无参考要点，按通用标准评分"]
-    content = render_structured(template, RoundScore, {
+    content = UNTRUSTED_DATA_RULE + "\n\n" + render_structured(template, RoundScore, {
         "position": position,
         "question": question,
         "reference_points": json.dumps(merged, ensure_ascii=False),
-        "answer": answer,
+        "answer": wrap_untrusted("answer", answer),
         "rubric": yaml.dump(rubric_data["dimensions"], allow_unicode=True),
         "anchors": yaml.dump(anchors_data["anchors"], allow_unicode=True),
     })

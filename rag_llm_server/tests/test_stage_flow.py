@@ -1,8 +1,12 @@
 """阶段推进纯函数测试（spec §2.3 状态机 + Ruling R1 轮数）。"""
 from agents.stage_flow import (
-    DEEPDIVE_ROUND_CAP, QA_ROUND_CAP, TECHNICAL_ROUND_CAP,
+    DEEPDIVE_ROUND_CAP, QA_ROUND_CAP, TECHNICAL_ROUND_CAP, UNSCORED_STAGES,
     after_planner_route, maybe_advance_stage,
 )
+
+
+def test_intro_qa_finish_are_unscored():
+    assert UNSCORED_STAGES == ("intro", "qa", "finish")
 
 
 def test_intro_advances_after_one_round():
