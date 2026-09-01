@@ -289,7 +289,7 @@ export const useJoin = (): [
         }
       }
 
-      handleAIGCModeStart();
+      await handleAIGCModeStart();
     } finally {
       setJoining(false);
     }

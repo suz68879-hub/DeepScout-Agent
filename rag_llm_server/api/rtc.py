@@ -10,15 +10,18 @@ from agents.interviewer import ERROR_REPLY, generate_stream
 from api.auth import get_current_user
 from config import settings
 from services.agent_llm import get_agent_llm
-from services.callback_verify import verify_callback
+from services.callback_verify import callback_replay_id, verify_callback
+from services.callback_replay import claim_callback_replay
 from services.interview_service import (
     _restore_state,
     await_pending_cold,
     schedule_cold_path,
     session_config,
+    readiness_gate_reply,
     sse_chunk,
 )
 from services.rtc_service import (
+    ALLOWED_VOICE_CHAT_ACTIONS,
     RTCConfigurationError,
     call_voice_chat_openapi,
     get_scenes_payload,
@@ -58,6 +61,8 @@ async def proxy(
     if not session:
         raise HTTPException(status_code=404, detail="interview session not found")
     action = request.query_params.get("Action")
+    if action not in ALLOWED_VOICE_CHAT_ACTIONS:
+        raise HTTPException(status_code=400, detail="unsupported RTC action")
     version = request.query_params.get("Version", "2024-12-01")
     logger.info("Forwarding RTC OpenAPI action=%s session=%s", action, session["id"])
     try:
@@ -94,10 +99,20 @@ async def chat_callback(request: Request, rtc_callback_id: str | None = None):
         logger.warning("RTC callback contained invalid JSON")
         return {"text": ERROR_REPLY}
 
+    if not isinstance(body, dict):
+        logger.warning("RTC callback body was not an object")
+        return JSONResponse({"text": "signature verification failed"}, status_code=403)
     if not settings.RTC_CALLBACK_SECRET:
         raise HTTPException(status_code=503, detail="RTC callback verification is not configured")
     if not verify_callback(body, settings.RTC_CALLBACK_SECRET):
         logger.warning("RTC callback signature verification failed")
+        return JSONResponse({"text": "signature verification failed"}, status_code=403)
+    try:
+        claimed = await claim_callback_replay(callback_replay_id(body))
+    except SharedStateUnavailable:
+        raise HTTPException(status_code=503, detail="shared state unavailable") from None
+    if not claimed:
+        logger.warning("RTC callback replay rejected")
         return JSONResponse({"text": "signature verification failed"}, status_code=403)
 
     session = await storage.session_get_by_callback(rtc_callback_id)
@@ -121,6 +136,18 @@ async def chat_callback(request: Request, rtc_callback_id: str | None = None):
         config = session_config(session["id"])
         state = await _restore_state(session)
         graph = get_graph()
+        gate_reply = readiness_gate_reply(state, user_text)
+        if gate_reply is not None:
+            await graph.aupdate_state(config, {
+                "messages": [
+                    {"role": "user", "content": user_text},
+                    {"role": "assistant", "content": gate_reply},
+                ],
+                "pending_user_text": "",
+            }, as_node="interviewer")
+            yield sse_chunk(gate_reply)
+            yield "data: [DONE]\n\n"
+            return
         await graph.aupdate_state(config, {
             "messages": [{"role": "user", "content": user_text}],
             "pending_user_text": user_text,

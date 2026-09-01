@@ -14,11 +14,44 @@ from db.models import AppUser, BackgroundJob, InterviewSession, OutboxEvent
 from services.jobs.types import JobStatus
 
 
-def test_welcome_message_proactively_starts_self_introduction_for_position():
+def test_welcome_message_asks_for_readiness_before_self_introduction():
     message = isv.build_welcome_message({"position": "Java 后端开发工程师"})
     assert "Java 后端开发工程师" in message
-    assert "自我介绍" in message
+    assert "准备好了吗" in message
+    assert "自我介绍" not in message
     assert "课程顾问" not in message
+
+
+@pytest.mark.parametrize("user_text", ["我准备好了", "准备好了，开始吧", "可以开始", "ready"])
+def test_readiness_gate_invites_confirmed_candidate_to_self_introduction(user_text):
+    reply = isv.readiness_gate_reply(
+        {"stage": "intro", "round_no": 0, "messages": []}, user_text,
+    )
+    assert reply is not None
+    assert "一分钟" in reply
+    assert "自我介绍" in reply
+
+
+@pytest.mark.parametrize("user_text", ["还没准备好", "等一下", "稍等一下"])
+def test_readiness_gate_waits_for_unready_candidate(user_text):
+    reply = isv.readiness_gate_reply(
+        {"stage": "intro", "round_no": 0, "messages": []}, user_text,
+    )
+    assert reply is not None
+    assert "准备好" in reply
+    assert "自我介绍" not in reply
+
+
+def test_readiness_gate_releases_after_self_introduction_prompt():
+    reply = isv.readiness_gate_reply(
+        {
+            "stage": "intro",
+            "round_no": 0,
+            "messages": [{"role": "assistant", "content": isv.SELF_INTRO_PROMPT}],
+        },
+        "我叫小王，有三年后端开发经验",
+    )
+    assert reply is None
 
 
 @pytest.fixture

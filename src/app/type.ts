@@ -6,6 +6,7 @@
 export type RequestParams = Record<string, any>;
 
 export interface RequestResponse {
+  detail?: string;
   ResponseMetadata: Partial<{
     Action: string;
     Version: string;

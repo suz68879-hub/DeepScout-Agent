@@ -61,6 +61,28 @@ async def test_proxy_uses_server_side_session_identifiers(monkeypatch):
     assert calls == [("StopVoiceChat", "v1", SESSION, {"SessionId": "s1", "SceneID": "scene"})]
 
 
+@pytest.mark.parametrize("action", ["ListApps", "StartRecord", "", None])
+async def test_proxy_rejects_unknown_action_before_provider_call(monkeypatch, action):
+    calls = []
+    monkeypatch.setattr(rtc_api.storage, "session_get", lambda *args: async_value(SESSION))
+
+    async def forbidden(*_args, **_kwargs):
+        calls.append(True)
+        raise AssertionError("unknown Action must not reach OpenAPI")
+
+    monkeypatch.setattr(rtc_api, "call_voice_chat_openapi", forbidden)
+    query = {} if action is None else {"Action": action}
+    with pytest.raises(rtc_api.HTTPException) as exc_info:
+        await rtc_api.proxy(
+            Request({}, **query),
+            rtc_api.ProxyRequest(SessionId="s1"),
+            USER,
+        )
+    assert exc_info.value.status_code == 400
+    assert "action" in str(exc_info.value.detail).lower()
+    assert calls == []
+
+
 @pytest.mark.parametrize(
     ("error", "status_code", "detail"),
     [
@@ -95,5 +117,51 @@ async def test_callback_rejects_invalid_signature_when_secret_is_configured(monk
     response = await rtc_api.chat_callback(
         Request({"Signature": "invalid"}), "callback1",
     )
+    assert response.status_code == 403
+    assert json.loads(response.body) == {"text": "signature verification failed"}
+
+
+async def test_callback_rejects_tampered_messages_when_signature_was_valid(monkeypatch):
+    from services.callback_verify import compute_signature
+
+    monkeypatch.setattr(rtc_api.settings, "RTC_CALLBACK_SECRET", "secret")
+    body = {
+        "AppId": "app1",
+        "EventId": "evt-tamper",
+        "EventTime": "1700000000",
+        "Nonce": "n1",
+        "messages": [{"role": "user", "content": "hello"}],
+    }
+    body["Signature"] = compute_signature(body, "secret")
+    body["messages"] = [{"role": "user", "content": "forged"}]
+    response = await rtc_api.chat_callback(Request(body), "callback1")
+    assert response.status_code == 403
+    assert json.loads(response.body) == {"text": "signature verification failed"}
+
+
+async def test_callback_rejects_replayed_event_id(monkeypatch):
+    monkeypatch.setattr(rtc_api.settings, "RTC_CALLBACK_SECRET", "secret")
+    monkeypatch.setattr(rtc_api, "verify_callback", lambda *_args, **_kwargs: True)
+
+    async def already_seen(_event_id):
+        return False
+
+    monkeypatch.setattr(rtc_api, "claim_callback_replay", already_seen)
+    response = await rtc_api.chat_callback(
+        Request({
+            "Signature": "ok",
+            "EventId": "dup-1",
+            "EventTime": "1700000000",
+            "messages": [{"role": "user", "content": "hello"}],
+        }),
+        "callback1",
+    )
+    assert response.status_code == 403
+    assert json.loads(response.body) == {"text": "signature verification failed"}
+
+
+async def test_callback_rejects_non_object_json_body(monkeypatch):
+    monkeypatch.setattr(rtc_api.settings, "RTC_CALLBACK_SECRET", "secret")
+    response = await rtc_api.chat_callback(Request(["not", "an", "object"]), "callback1")
     assert response.status_code == 403
     assert json.loads(response.body) == {"text": "signature verification failed"}
