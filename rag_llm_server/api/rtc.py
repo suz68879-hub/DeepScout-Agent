@@ -7,7 +7,7 @@ from pydantic import BaseModel
 
 from agents.graph import get_graph
 from agents.interviewer import ERROR_REPLY, generate_stream
-from api.auth import get_current_user
+from api.auth import get_current_user, get_rate_limiter
 from config import settings
 from services.agent_llm import get_agent_llm
 from services.callback_verify import callback_replay_id, verify_callback
@@ -111,6 +111,19 @@ async def chat_callback(request: Request, rtc_callback_id: str | None = None):
     if not verify_callback(body, settings.RTC_CALLBACK_SECRET):
         logger.warning("RTC callback signature verification failed")
         return JSONResponse({"text": "signature verification failed"}, status_code=403)
+    try:
+        decision = await get_rate_limiter().consume_callback(
+            request.client.host if getattr(request, "client", None) else "unknown",
+            rtc_callback_id,
+        )
+    except SharedStateUnavailable:
+        raise HTTPException(status_code=503, detail="shared state unavailable") from None
+    if not decision.allowed:
+        raise HTTPException(
+            status_code=429,
+            detail="too many requests",
+            headers={"Retry-After": str(decision.retry_after)},
+        )
     try:
         claimed = await claim_callback_replay(callback_replay_id(body))
     except SharedStateUnavailable:

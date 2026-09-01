@@ -3,7 +3,7 @@ import hashlib
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 
-from api.auth import get_current_user
+from api.auth import get_current_user, require_user_quota
 from middleware.idempotency import execute_idempotent
 from services.recording_service import (
     ALLOWED_EXTS, DEFAULT_POSITION, MAX_UPLOAD_BYTES, upload_recording,
@@ -17,7 +17,7 @@ router = APIRouter(prefix="/api/recording", tags=["recording"])
 async def upload_recording_file(
     file: UploadFile = File(...),
     position: str = Form(DEFAULT_POSITION),
-    user: dict = Depends(get_current_user),
+    user: dict = Depends(require_user_quota),
     request: Request = None,
 ):
     """上传面试录音：边界校验 → TOS → 提交识别任务 → {recording_id, status}。"""

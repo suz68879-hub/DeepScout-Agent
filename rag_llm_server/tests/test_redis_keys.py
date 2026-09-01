@@ -23,6 +23,7 @@ from services.redis_keys import (
     session_cache_ttl,
     validate_ttl,
 )
+from services import redis_keys as redis_keys_mod
 
 
 def test_login_key_has_stable_hash_and_normalizes_username():
@@ -44,6 +45,8 @@ def test_keys_are_environment_isolated_and_contain_no_plain_identifiers():
         rtc_lock_key("test", raw_values[3]),
         rtc_fence_key("test", raw_values[3]),
         callback_replay_key("test", "event-id-1"),
+        redis_keys_mod.llm_rate_limit_key("test", "user-1"),
+        redis_keys_mod.callback_rate_limit_key("test", raw_values[1], "callback-1"),
         idempotency_record_key("test", "user-1", "POST", "/api/interview", raw_values[4]),
     ]
 
@@ -51,7 +54,7 @@ def test_keys_are_environment_isolated_and_contain_no_plain_identifiers():
     assert len(set(keys)) == len(keys)
     for key in keys:
         assert key.startswith("deepscout:test:")
-        assert all(value not in key for value in (*raw_values, "event-id-1"))
+        assert all(value not in key for value in (*raw_values, "event-id-1", "callback-1", "user-1"))
 
 
 @pytest.mark.parametrize("app_env", ["", "staging", "test:other"])
@@ -74,6 +77,8 @@ def test_locked_ttl_values_and_session_cap():
     assert RTC_RENEW_SECONDS == 10
     assert IDEMPOTENCY_TTL_SECONDS == 24 * 60 * 60
     assert CALLBACK_REPLAY_TTL_SECONDS == 660
+    assert redis_keys_mod.LLM_RATE_WINDOW_SECONDS == 60
+    assert redis_keys_mod.CALLBACK_RATE_WINDOW_SECONDS == 60
     assert session_cache_ttl(15.9) == 15
     assert session_cache_ttl(8 * 24 * 60 * 60) == 7 * 24 * 60 * 60
 

@@ -13,6 +13,13 @@ from services.redis_keys import auth_session_key
 from services.session_cache import SessionCache
 
 
+INVITE_CODE = "team-invite"
+
+
+def _register_payload(username: str, password: str = "password-123", **extra):
+    return {"username": username, "password": password, "invite_code": INVITE_CODE, **extra}
+
+
 @pytest.fixture(autouse=True)
 def allow_auth_rate_limits(monkeypatch):
     class AllowLimiter:
@@ -22,10 +29,17 @@ def allow_auth_rate_limits(monkeypatch):
         async def consume_login(self, _client_ip, _username):
             return RateLimitDecision(True, 0)
 
+        async def consume_expensive(self, _user_id):
+            return RateLimitDecision(True, 0)
+
+        async def consume_callback(self, _client_ip, _callback_id):
+            return RateLimitDecision(True, 0)
+
         async def clear_login(self, _client_ip, _username):
             return None
 
     monkeypatch.setattr(auth_api, "get_rate_limiter", lambda: AllowLimiter())
+    monkeypatch.setattr(auth_api.settings, "REGISTER_INVITE_CODE", INVITE_CODE, raising=False)
 
 
 async def test_register_me_and_logout_cookie_flow(tmp_storage, monkeypatch):
@@ -37,7 +51,7 @@ async def test_register_me_and_logout_cookie_flow(tmp_storage, monkeypatch):
 
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         registered = await client.post(
-            "/api/auth/register", json={"username": "Alice_01", "password": "password-123"},
+            "/api/auth/register", json=_register_payload("Alice_01"),
         )
         assert registered.status_code == 201
         assert registered.json() == {"id": registered.json()["id"], "username": "alice_01"}
@@ -64,7 +78,7 @@ async def test_duplicate_username_and_generic_login_error(tmp_storage, monkeypat
     transport = httpx.ASGITransport(app=app)
 
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-        body = {"username": "alice", "password": "password-123"}
+        body = _register_payload("alice")
         assert (await client.post("/api/auth/register", json=body)).status_code == 201
         assert (await client.post("/api/auth/register", json=body)).status_code == 409
         response = await client.post(
@@ -145,7 +159,7 @@ async def test_two_api_clients_share_login_and_logout_state(tmp_storage, monkeyp
         ):
             registered = await first.post(
                 "/api/auth/register",
-                json={"username": "shared_user", "password": "password-123"},
+                json=_register_payload("shared_user"),
             )
             assert registered.status_code == 201
             token = first.cookies.get(auth_api.COOKIE_NAME)
@@ -163,3 +177,58 @@ async def test_two_api_clients_share_login_and_logout_state(tmp_storage, monkeyp
         await first_redis.aclose()
         await second_redis.aclose()
         await storage.close()
+
+
+async def test_register_without_invite_code_is_forbidden():
+    app = FastAPI()
+    app.include_router(auth_api.router)
+    transport = httpx.ASGITransport(app=app)
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/api/auth/register",
+            json={"username": "alice", "password": "password-123"},
+        )
+    assert response.status_code == 403
+    assert response.json() == {"detail": "invalid invite code"}
+
+
+async def test_register_with_wrong_invite_code_is_forbidden():
+    app = FastAPI()
+    app.include_router(auth_api.router)
+    transport = httpx.ASGITransport(app=app)
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/api/auth/register",
+            json=_register_payload("alice", invite_code="wrong-code"),
+        )
+    assert response.status_code == 403
+    assert response.json() == {"detail": "invalid invite code"}
+
+
+async def test_register_is_closed_when_invite_code_is_unset(monkeypatch):
+    monkeypatch.setattr(auth_api.settings, "REGISTER_INVITE_CODE", "", raising=False)
+    app = FastAPI()
+    app.include_router(auth_api.router)
+    transport = httpx.ASGITransport(app=app)
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/api/auth/register", json=_register_payload("alice"),
+        )
+    assert response.status_code == 403
+    assert response.json() == {"detail": "invalid invite code"}
+
+
+async def test_user_quota_returns_429_without_calling_handler(monkeypatch):
+    class DenyLimiter:
+        async def consume_expensive(self, user_id):
+            assert user_id == "u1"
+            return RateLimitDecision(False, 9)
+
+    monkeypatch.setattr(auth_api, "get_rate_limiter", lambda: DenyLimiter())
+    with pytest.raises(auth_api.HTTPException) as exc_info:
+        await auth_api.require_user_quota({"id": "u1", "username": "alice"})
+    assert exc_info.value.status_code == 429
+    assert exc_info.value.headers["Retry-After"] == "9"

@@ -13,6 +13,7 @@ export default function AuthPage({ mode }: { mode: 'login' | 'register' }) {
   const navigate = useNavigate();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
+  const [inviteCode, setInviteCode] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
   const rawReturnTo = (location.state as LocationState | null)?.returnTo;
@@ -26,7 +27,7 @@ export default function AuthPage({ mode }: { mode: 'login' | 'register' }) {
     setError('');
     try {
       if (mode === 'login') await login(username, password);
-      else await register(username, password);
+      else await register(username, password, inviteCode);
       navigate(returnTo, { replace: true });
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : '请求失败，请稍后重试');
@@ -68,6 +69,24 @@ export default function AuthPage({ mode }: { mode: 'login' | 'register' }) {
             value={password}
             onChange={(event) => setPassword(event.target.value)}
           />
+          {!isLogin ? (
+            <>
+              <label htmlFor="invite-code">邀请码</label>
+              <input
+                id="invite-code"
+                name="invite_code"
+                autoComplete="off"
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck={false}
+                maxLength={128}
+                required
+                value={inviteCode}
+                onChange={(event) => setInviteCode(event.target.value)}
+              />
+              <span className={styles.hint}>由管理员下发，未持有邀请码无法注册</span>
+            </>
+          ) : null}
           {error ? <div className={styles.error} role="alert">{error}</div> : null}
           <button type="submit" disabled={submitting}>
             {submitting ? '请稍候...' : isLogin ? '登录' : '注册并登录'}

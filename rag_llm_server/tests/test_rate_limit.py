@@ -52,6 +52,32 @@ async def test_redis_failure_is_fail_closed_without_host_leak():
     assert "cache.internal" not in str(exc_info.value)
 
 
+class CountingRedis:
+    def __init__(self):
+        self.counts: dict[str, int] = {}
+
+    async def script_load(self, _script):
+        return "sha"
+
+    async def evalsha(self, _sha, _num_keys, key, _window, maximum, _member):
+        count = self.counts.get(key, 0)
+        if count >= int(maximum):
+            return [0, 12]
+        self.counts[key] = count + 1
+        return [1, 0]
+
+
+async def test_expensive_quota_is_isolated_per_user():
+    limiter = RateLimiter(CountingRedis(), "test", expensive_maximum=1)
+    first = await limiter.consume_expensive("user-1")
+    second = await limiter.consume_expensive("user-1")
+    other = await limiter.consume_expensive("user-2")
+    assert first.allowed is True
+    assert second.allowed is False
+    assert second.retry_after == 12
+    assert other.allowed is True
+
+
 async def test_two_real_clients_share_atomic_login_limit_and_clear():
     url = os.getenv("REDIS_URL")
     if not url:
