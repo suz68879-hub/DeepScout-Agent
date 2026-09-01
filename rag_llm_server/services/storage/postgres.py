@@ -440,6 +440,19 @@ class PostgresRepository(PostgresAuthRepository):
             else None
         )
 
+    async def report_get_by_session(self, user_id: str, session_id: str) -> dict | None:
+        model = await self._session.scalar(
+            select(InterviewReport).where(
+                InterviewReport.user_id == uuid.UUID(user_id),
+                InterviewReport.session_id == uuid.UUID(session_id),
+            )
+        )
+        return (
+            _row_dict(model, {"scores_json", "feedback_json", "suggestions_json"})
+            if model
+            else None
+        )
+
     async def report_list(self, user_id: str) -> list[dict]:
         models = (
             await self._session.scalars(
@@ -672,6 +685,9 @@ class PostgresStorage(BaseStorage):
 
     async def report_get(self, user_id, report_id):
         return await self._call("report_get", user_id, report_id)
+
+    async def report_get_by_session(self, user_id, session_id):
+        return await self._call("report_get_by_session", user_id, session_id)
 
     async def report_list(self, user_id):
         return await self._call("report_list", user_id)

@@ -144,6 +144,13 @@ class InterviewSession(Base):
             started_at.desc(),
             id.desc(),
         ),
+        Index(
+            "uq_interview_session_one_running_per_user",
+            user_id,
+            unique=True,
+            postgresql_where=text("status = 'running'"),
+            sqlite_where=text("status = 'running'"),
+        ),
     )
 
 

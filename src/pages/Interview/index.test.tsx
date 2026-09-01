@@ -2,7 +2,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { Provider } from 'react-redux';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as restApi from '@/api/rest';
 import store from '@/store';
 import InterviewPage from './index';
@@ -40,6 +40,10 @@ afterEach(() => {
   localStorage.clear();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+});
+
+beforeEach(() => {
+  vi.spyOn(restApi, 'abandonSession').mockImplementation(() => undefined);
 });
 
 describe('InterviewPage', () => {
@@ -178,5 +182,58 @@ describe('InterviewPage', () => {
     );
     await waitFor(() => expect(screen.getByText('restored-report')).toBeTruthy());
     expect(restApi.pollJob).toHaveBeenCalledWith('job-saved', expect.any(AbortSignal));
+  });
+
+  it('关页时 keepalive 回收会话', async () => {
+    const abandon = vi.spyOn(restApi, 'abandonSession').mockImplementation(() => undefined);
+    vi.stubGlobal('fetch', vi.fn().mockImplementation((url: string) => {
+      const u = String(url);
+      if (u.includes('/api/interview/state')) return Promise.resolve(jsonResponse(statePayload));
+      if (u.includes('/getScenes')) {
+        return Promise.resolve(jsonResponse({ Result: { scenes: [] }, ResponseMetadata: { Action: 'getScenes', RequestId: 't4' } }));
+      }
+      return Promise.reject(new Error(`unexpected ${u}`));
+    }));
+    render(
+      <Provider store={store}>
+        <MemoryRouter initialEntries={['/interview/s1']}>
+          <Routes>
+            <Route path="/interview/:sessionId" element={<InterviewPage />} />
+          </Routes>
+        </MemoryRouter>
+      </Provider>
+    );
+    await screen.findByRole('button', { name: '结束面试' });
+    window.dispatchEvent(new Event('pagehide'));
+    expect(abandon).toHaveBeenCalledWith('s1');
+  });
+
+  it('状态已 finished 且有报告时跳转报告页', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockImplementation((url: string) => {
+      const u = String(url);
+      if (u.includes('/api/interview/state')) {
+        return Promise.resolve(jsonResponse({
+          ...statePayload,
+          stage: 'finish',
+          status: 'finished',
+          report_id: 'report-auto',
+        }));
+      }
+      if (u.includes('/getScenes')) {
+        return Promise.resolve(jsonResponse({ Result: { scenes: [] }, ResponseMetadata: { Action: 'getScenes', RequestId: 't5' } }));
+      }
+      return Promise.reject(new Error(`unexpected ${u}`));
+    }));
+    render(
+      <Provider store={store}>
+        <MemoryRouter initialEntries={['/interview/s1']}>
+          <Routes>
+            <Route path="/interview/:sessionId" element={<InterviewPage />} />
+            <Route path="/report/:reportId" element={<div>auto-finished-report</div>} />
+          </Routes>
+        </MemoryRouter>
+      </Provider>
+    );
+    await waitFor(() => expect(screen.getByText('auto-finished-report')).toBeTruthy());
   });
 });

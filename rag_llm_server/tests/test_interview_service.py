@@ -54,6 +54,19 @@ def test_readiness_gate_releases_after_self_introduction_prompt():
     assert reply is None
 
 
+def test_session_expired_by_started_at(monkeypatch):
+    monkeypatch.setattr(isv.settings, "SESSION_MAX_SECONDS", 3600, raising=False)
+    stale = {"started_at": "2026-01-01T00:00:00+00:00", "status": "running"}
+    assert isv.session_expired(stale, now="2026-01-01T02:00:00+00:00") is True
+    fresh = {"started_at": "2026-01-01T01:30:00+00:00", "status": "running"}
+    assert isv.session_expired(fresh, now="2026-01-01T02:00:00+00:00") is False
+
+
+def test_session_expired_ignores_non_running():
+    done = {"started_at": "2020-01-01T00:00:00+00:00", "status": "finished"}
+    assert isv.session_expired(done, now="2026-01-01T00:00:00+00:00") is False
+
+
 @pytest.fixture
 async def interview_job_runtime(monkeypatch):
     load_dotenv()

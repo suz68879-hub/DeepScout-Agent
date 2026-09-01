@@ -23,6 +23,8 @@ export interface InterviewStateResponse {
   round_no: number;
   current_question: Record<string, unknown> | null;
   scores: RoundScore[];
+  status?: 'running' | 'finishing' | 'finished' | 'abandoned';
+  report_id?: string | null;
 }
 
 // POST /api/interview/start

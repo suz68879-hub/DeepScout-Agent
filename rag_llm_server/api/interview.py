@@ -12,9 +12,10 @@ from api.auth import get_current_user, require_user_quota
 from config import settings
 from middleware.idempotency import execute_idempotent
 from services.agent_llm import get_agent_llm
-from services.interview_service import schedule_finish_job, session_config
+from services.interview_service import schedule_finish_job, session_config, reclaim_running_sessions, abandon_session
 from services.report_service import save_report
 from services.storage import storage
+from services.storage.base import StorageConflictError, StorageVersionConflictError
 from services.clock import utc_now
 
 router = APIRouter(prefix="/api/interview", tags=["interview"])
@@ -53,7 +54,8 @@ async def start_interview(
         )
         if body.resume_id and not resume:
             raise HTTPException(status_code=404, detail="简历不存在")
-        session = await storage.session_create(user["id"], {
+        await reclaim_running_sessions(user["id"])
+        payload = {
             "id": str(uuid.uuid4()),
             "resume_id": body.resume_id,
             "position": body.position,
@@ -61,7 +63,18 @@ async def start_interview(
             "status": "running",
             "started_at": utc_now(),
             "ended_at": None,
-        })
+        }
+        try:
+            session = await storage.session_create(user["id"], payload)
+        except StorageConflictError:
+            await reclaim_running_sessions(user["id"])
+            try:
+                payload["id"] = str(uuid.uuid4())
+                session = await storage.session_create(user["id"], payload)
+            except StorageConflictError:
+                raise HTTPException(
+                    status_code=409, detail="已有进行中的面试，请稍后重试",
+                ) from None
         await get_graph().aupdate_state(session_config(session["id"]), {
             "session_id": session["id"],
             "position": body.position,
@@ -85,6 +98,35 @@ async def start_interview(
     )
 
 
+async def _read_abandon_session_id(request: Request) -> str:
+    content_type = request.headers.get("content-type", "")
+    if "application/json" in content_type:
+        payload = await request.json()
+        session_id = payload.get("session_id") if isinstance(payload, dict) else None
+    else:
+        form = await request.form()
+        session_id = form.get("session_id")
+    if not isinstance(session_id, str) or not session_id.strip():
+        raise HTTPException(status_code=422, detail="session_id required")
+    return session_id
+
+
+@router.post("/abandon")
+async def abandon_interview(
+    request: Request,
+    user: dict = Depends(get_current_user),
+):
+    """关页/TTL 回收：结束 running 但不生成报告。
+
+    JSON 与 x-www-form-urlencoded 都接受；后者是 CORS simple request，关页 keepalive 才发得出去。
+    """
+    session_id = await _read_abandon_session_id(request)
+    session = await abandon_session(user["id"], session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="会话不存在")
+    return {"session_id": session["id"], "status": session["status"]}
+
+
 @router.post("/finish", status_code=202)
 async def finish_interview(
     body: FinishRequest,
@@ -96,6 +138,24 @@ async def finish_interview(
         session = await storage.session_get(user["id"], body.session_id)
         if not session:
             raise HTTPException(status_code=404, detail="会话不存在")
+        if session.get("status") == "abandoned":
+            raise HTTPException(status_code=409, detail="会话已结束，请勿重复请求")
+        if session.get("status") == "running":
+            try:
+                marked = await storage.session_update(
+                    user["id"],
+                    body.session_id,
+                    {"status": "finishing"},
+                    expected_version=session.get("version"),
+                )
+                if marked:
+                    session = marked
+            except StorageVersionConflictError:
+                session = await storage.session_get(user["id"], body.session_id)
+                if not session:
+                    raise HTTPException(status_code=404, detail="会话不存在")
+                if session.get("status") == "abandoned":
+                    raise HTTPException(status_code=409, detail="会话已结束，请勿重复请求")
         if settings.ENABLE_LEGACY_SYNC_FINISH:
             if session.get("status") == "finished":
                 raise HTTPException(status_code=409, detail="会话已结束，请勿重复请求")
@@ -145,10 +205,13 @@ async def interview_state(session_id: str, user: dict = Depends(get_current_user
     if state.get("session_id") != session_id:
         # checkpoint 丢失/新建空状态时不返回误导性空状态（与 /finish 守卫同语义）
         raise HTTPException(status_code=409, detail="会话状态不存在或已过期")
+    report = await storage.report_get_by_session(user["id"], session_id)
     return {
         "session_id": session_id,
         "stage": state.get("stage", session.get("stage") or "intro"),
         "round_no": state.get("round_no", 0),
         "current_question": state.get("current_question"),
         "scores": state.get("scores", []),
+        "status": session.get("status"),
+        "report_id": report["id"] if report else None,
     }

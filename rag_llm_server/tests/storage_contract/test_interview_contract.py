@@ -1,6 +1,6 @@
 import pytest
 
-from services.storage.base import StorageVersionConflictError
+from services.storage.base import StorageConflictError, StorageVersionConflictError
 
 
 async def _users(prefix, scope):
@@ -68,6 +68,21 @@ async def test_session_optimistic_update_contract(repository_scope):
         with pytest.raises(StorageVersionConflictError):
             await repository.session_update(
                 alice["id"], session["id"], {"stage": "closing"}, expected_version=1
+            )
+
+
+async def test_one_running_session_per_user_contract(repository_scope):
+    prefix, scope = repository_scope
+    alice, _ = await _users(prefix, scope)
+    async with scope() as repository:
+        await repository.session_create(
+            alice["id"],
+            {"position": "Backend", "stage": "intro", "status": "running"},
+        )
+        with pytest.raises(StorageConflictError):
+            await repository.session_create(
+                alice["id"],
+                {"position": "Backend", "stage": "intro", "status": "running"},
             )
 
 

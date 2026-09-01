@@ -1,11 +1,11 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useSelector } from 'react-redux';
 import { Button, Message, Spin } from '@arco-design/web-react';
 import AiAvatarCard from '@/components/AiAvatarCard';
 import ScoreOverlay from '@/components/ScoreOverlay';
 import StageIndicator from '@/components/StageIndicator';
-import { ApiError, jobErrorMessage, pollJob, postJson } from '@/api/rest';
+import { ApiError, abandonSession, jobErrorMessage, pollJob, postJson } from '@/api/rest';
 import type { FinishResponse } from '@/domain/interview/types';
 import { stageMeta } from '@/domain/interview/stageDisplay';
 import { isE2EMode, useE2ESessionDriver } from '@/lib/e2eMock';
@@ -43,6 +43,8 @@ export default function InterviewPage() {
   );
   const { isAudioPublished, isVideoPublished, switchMic, switchCamera } = useDeviceState();
   const { state } = useSessionState(sessionId ?? '');
+  const finishingRef = useRef(false);
+  finishingRef.current = Boolean(pendingJob);
 
   const { reinit } = useInitScenes(
     sessionId ?? '',
@@ -62,10 +64,33 @@ export default function InterviewPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pendingJob, isJoined, joining, rtc.AppId]);
 
-  // 离开页面时退房（结束面试必须显式走 /finish，退房不结束会话）
+  // 离开面试间时退房；未进入 finish 轮询则回收会话（含浏览器后退）
   useEffect(() => () => {
     leaveRoom();
+    if (sessionId && !finishingRef.current) {
+      abandonSession(sessionId);
+    }
   }, []);
+
+  useEffect(() => {
+    if (!sessionId) return undefined;
+    const onPageHide = () => {
+      if (finishingRef.current) return;
+      abandonSession(sessionId);
+    };
+    window.addEventListener('pagehide', onPageHide);
+    return () => window.removeEventListener('pagehide', onPageHide);
+  }, [sessionId]);
+
+  useEffect(() => {
+    if (!state || pendingJob || hangingUp) return;
+    if (state.status === 'finished' && typeof state.report_id === 'string') {
+      void leaveRoom();
+      navigate(`/report/${state.report_id}`);
+    }
+    // leaveRoom 每次渲染都是新函数，不能放进依赖，否则会无限调度
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state?.status, state?.report_id, pendingJob, hangingUp, navigate]);
 
   const retryJoin = async () => {
     setJoinError(null);

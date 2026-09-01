@@ -256,6 +256,7 @@ class Config:
         self.REDIS_MAX_CONNECTIONS = _int_env("REDIS_MAX_CONNECTIONS", 20, 1)
         self.REDIS_SOCKET_TIMEOUT = _positive_float_env("REDIS_SOCKET_TIMEOUT", 2.0)
         self.REDIS_CONNECT_TIMEOUT = _positive_float_env("REDIS_CONNECT_TIMEOUT", 2.0)
+        self.SESSION_MAX_SECONDS = _int_env("SESSION_MAX_SECONDS", 3600, 60)
         self.AUTH_SESSION_CACHE_ENABLED = _bool_env(
             "AUTH_SESSION_CACHE_ENABLED", False
         )

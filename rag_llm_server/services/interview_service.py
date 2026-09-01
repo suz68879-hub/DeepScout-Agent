@@ -8,6 +8,7 @@ import json
 import logging
 import time
 import uuid
+from datetime import datetime, timezone
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -21,6 +22,7 @@ from services.jobs.handlers import JobType
 from services.jobs.repository import JobRepository
 from services.jobs.types import JobRecord, JobStatus
 from services.storage import storage
+from services.storage.base import StorageConflictError, StorageVersionConflictError
 from services.storage.postgres import PostgresRepository
 
 DEFAULT_POSITION = "Java后端"
@@ -61,6 +63,86 @@ def readiness_gate_reply(state: dict, user_text: str) -> str | None:
 def session_config(session_id: str) -> dict:
     """LangGraph config：thread_id = session_id（spec §5.1）。"""
     return {"configurable": {"thread_id": session_id}}
+
+
+def _parse_dt(value: object) -> datetime | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        parsed = value
+    else:
+        try:
+            parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
+def session_expired(
+    session: dict,
+    *,
+    now: datetime | str | None = None,
+    max_seconds: int | None = None,
+) -> bool:
+    """running 会话超过 SESSION_MAX_SECONDS 视为过期，需回收。"""
+    if session.get("status") != "running":
+        return False
+    started = _parse_dt(session.get("started_at"))
+    if started is None:
+        return False
+    current = _parse_dt(now) if now is not None else datetime.now(timezone.utc)
+    if current is None:
+        current = datetime.now(timezone.utc)
+    limit = settings.SESSION_MAX_SECONDS if max_seconds is None else max_seconds
+    return (current - started).total_seconds() > limit
+
+
+async def _stop_voice_chat_best_effort(session: dict) -> None:
+    try:
+        from services.rtc_service import call_voice_chat_openapi
+
+        await call_voice_chat_openapi("StopVoiceChat", "2024-12-01", session, {})
+    except Exception:
+        logger.warning(
+            "StopVoiceChat during session reclaim failed",
+            extra={"event": "interview_reclaim_stop_failed", "session_id": session.get("id")},
+        )
+
+
+async def abandon_session(
+    user_id: str,
+    session_id: str,
+    session: dict | None = None,
+) -> dict | None:
+    """结束 running 会话但不生成报告（关页 / TTL / 开新场回收）。
+
+    以库中当前行为准做 CAS，调用方传入的 snapshot 不能覆盖 finished。
+    """
+    current = await storage.session_get(user_id, session_id)
+    if current is None:
+        return None
+    if current.get("status") != "running":
+        return current
+    rtc_ids = session if session is not None else current
+    await _stop_voice_chat_best_effort(rtc_ids)
+    try:
+        updated = await storage.session_update(
+            user_id,
+            session_id,
+            {"status": "abandoned", "ended_at": utc_now()},
+            expected_version=current.get("version"),
+        )
+    except StorageVersionConflictError:
+        return await storage.session_get(user_id, session_id)
+    return updated or current
+
+
+async def reclaim_running_sessions(user_id: str) -> None:
+    """同一用户只保留一场 running：先回收旧场再允许创建。"""
+    for session in await storage.session_list_running(user_id):
+        await abandon_session(user_id, session["id"], session)
 
 
 async def get_active_session(user_id: str) -> dict:
@@ -224,6 +306,8 @@ async def run_cold_path(job: JobRecord) -> dict:
             or state.get("session_id") != session_id
         ):
             raise ColdPathStateError("INTERVIEW_SESSION_NOT_FOUND")
+        if session.get("status") == "abandoned":
+            return {"schema_version": 1, "session_id": session_id}
         if not snapshot.next:
             if state.get("stage") != session.get("stage"):
                 session = await storage.session_update(
@@ -259,7 +343,7 @@ async def run_cold_path(job: JobRecord) -> dict:
             raise ColdPathStateError("INTERVIEW_SESSION_NOT_FOUND")
 
     report = state.get("report")
-    if report:
+    if report and session.get("status") != "abandoned":
         from services.report_service import save_report
 
         report_id = await save_report(session, report, state)
