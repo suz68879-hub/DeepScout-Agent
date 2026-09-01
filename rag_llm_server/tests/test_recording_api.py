@@ -57,7 +57,8 @@ async def test_upload_happy_path(monkeypatch):
 
     app = FastAPI()
     app.include_router(rec_api.router)
-    app.dependency_overrides[rec_api.get_current_user] = lambda: TEST_USER
+    # 端点 Depends(require_user_quota)，内部会打 Redis；覆盖整条依赖以免 CI 无 Redis 时 503
+    app.dependency_overrides[rec_api.require_user_quota] = lambda: TEST_USER
     resp = TestClient(app).post(
         "/api/recording/upload",
         files={"file": ("a.wav", b"RIFF", "audio/wav")},
