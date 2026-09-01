@@ -1,6 +1,7 @@
 """FastAPI 应用装配、生命周期与通用中间件。"""
 import logging
 from contextlib import asynccontextmanager
+from urllib.parse import urlparse
 
 import uvicorn
 from fastapi import FastAPI, Request
@@ -35,6 +36,20 @@ from services.redis_client import close_redis, init_redis
 from services.storage import close_storage, init_storage
 
 logger = logging.getLogger(__name__)
+_MUTATING_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+
+
+def _request_origin(request: Request) -> str | None:
+    origin = request.headers.get("origin")
+    if origin:
+        return origin
+    referer = request.headers.get("referer")
+    if not referer:
+        return None
+    parsed = urlparse(referer)
+    if parsed.scheme and parsed.netloc:
+        return f"{parsed.scheme}://{parsed.netloc}"
+    return None
 
 
 @asynccontextmanager
@@ -102,12 +117,12 @@ def create_app() -> FastAPI:
 
     @application.middleware("http")
     async def enforce_browser_origin(request: Request, call_next):
-        if (
-            request.method in {"POST", "PUT", "PATCH", "DELETE"}
-            and request.url.path != "/api/chat_callback"
-        ):
-            origin = request.headers.get("origin")
-            if origin and origin not in settings.CORS_ORIGINS:
+        if request.method in _MUTATING_METHODS and request.url.path != "/api/chat_callback":
+            origin = _request_origin(request)
+            if origin:
+                if origin not in settings.CORS_ORIGINS:
+                    return JSONResponse(status_code=403, content={"detail": "origin not allowed"})
+            elif request.cookies.get(auth_api.COOKIE_NAME):
                 return JSONResponse(status_code=403, content={"detail": "origin not allowed"})
         response = await call_next(request)
         response.headers.setdefault("X-Content-Type-Options", "nosniff")
@@ -138,7 +153,7 @@ def create_app() -> FastAPI:
     application.include_router(analytics_api.router)
     application.include_router(recording_api.router)
     application.include_router(rtc_api.router)
-    if settings.ENABLE_DEBUG_ROUTES:
+    if settings.ENABLE_DEBUG_ROUTES and settings.APP_ENV != "production":
         application.include_router(debug_api.router)
     return application
 

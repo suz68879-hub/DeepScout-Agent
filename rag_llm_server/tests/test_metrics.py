@@ -84,26 +84,39 @@ def test_db_pool_gauge_is_concurrency_safe_and_never_negative():
     assert "db_pool_in_use 1.0" in _render(metrics)
 
 
-def test_metrics_endpoint_allows_only_private_or_loopback_clients():
+def test_metrics_endpoint_allows_only_loopback_clients():
     assert is_internal_metrics_client("127.0.0.1") is True
-    assert is_internal_metrics_client("10.1.2.3") is True
+    assert is_internal_metrics_client("::1") is True
+    assert is_internal_metrics_client("10.1.2.3") is False
+    assert is_internal_metrics_client("192.168.1.8") is False
     assert is_internal_metrics_client("8.8.8.8") is False
     assert is_internal_metrics_client("not-an-ip") is False
 
 
 async def test_metrics_endpoint_rejects_public_client_and_serves_loopback():
     application = create_app()
-    private_transport = httpx.ASGITransport(
+    loopback_transport = httpx.ASGITransport(
         app=application,
         client=("127.0.0.1", 12345),
+    )
+    async with httpx.AsyncClient(
+        transport=loopback_transport,
+        base_url="http://test",
+    ) as client:
+        response = await client.get("/metrics")
+    assert response.status_code == 200
+    assert "http_server_requests_total" in response.text
+
+    private_transport = httpx.ASGITransport(
+        app=application,
+        client=("10.1.2.3", 12345),
     )
     async with httpx.AsyncClient(
         transport=private_transport,
         base_url="http://test",
     ) as client:
         response = await client.get("/metrics")
-    assert response.status_code == 200
-    assert "http_server_requests_total" in response.text
+    assert response.status_code == 403
 
     public_transport = httpx.ASGITransport(
         app=application,
