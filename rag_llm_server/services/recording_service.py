@@ -2,6 +2,7 @@
 
 import json
 import uuid
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -22,6 +23,7 @@ from services.storage import get_tos_store, storage
 from services.storage.postgres import PostgresRepository
 
 POLL_INTERVAL_SECONDS = 10
+ASR_POLL_DEADLINE = timedelta(minutes=30)
 ALLOWED_EXTS = {"mp3", "wav", "ogg"}
 MAX_UPLOAD_BYTES = 200 * 1024 * 1024
 DEFAULT_POSITION = "真实面试录音"
@@ -33,6 +35,18 @@ class RecordingStateError(Exception):
 
 class RecordingPollPending(Exception):
     """ASR has not completed; the durable task should be retried later."""
+
+
+def asr_poll_timed_out(
+    started_at: datetime | None, *, now: datetime | None = None
+) -> bool:
+    """True when ASR has stayed in-progress past the wall-clock deadline."""
+    if started_at is None:
+        return False
+    current = now or datetime.now(timezone.utc)
+    if started_at.tzinfo is None or current.tzinfo is None:
+        raise ValueError("timestamp must include a timezone")
+    return current - started_at >= ASR_POLL_DEADLINE
 
 
 class RecordingModelOutputError(Exception):

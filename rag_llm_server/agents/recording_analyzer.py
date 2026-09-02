@@ -55,10 +55,18 @@ async def judge_roles(transcript: list[dict], llm=None) -> SpeakerAssignment:
     })
     structured = llm.with_structured_output(SpeakerAssignment)
     try:
-        return await structured.ainvoke([HumanMessage(content=content)])
+        assignment = await structured.ainvoke([HumanMessage(content=content)])
     except Exception:
         logger.warning("角色判定 LLM 失败，回落启发式", exc_info=True)
         return _fallback_assignment(transcript)
+    speakers = {str(s.get("speaker")) for s in transcript}
+    if assignment.candidate_speaker not in speakers:
+        logger.warning(
+            "角色判定 speaker 不在转写中，回落启发式 candidate_speaker=%s",
+            assignment.candidate_speaker,
+        )
+        return _fallback_assignment(transcript)
+    return assignment
 
 
 def _validate(result: Report) -> bool:
