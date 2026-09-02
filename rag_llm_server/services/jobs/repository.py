@@ -322,6 +322,32 @@ class JobRepository:
             raise JobConflictError("job state conflict")
         return _record(model)
 
+    async def release(
+        self,
+        job_id: uuid.UUID | str,
+        *,
+        now: datetime | None = None,
+    ) -> JobRecord:
+        """把仍在运行的任务放回 pending，不消耗重试次数（ASR 仍在转写）。"""
+        released_at = _now(now)
+        model = await self._session.scalar(
+            update(BackgroundJob)
+            .where(
+                BackgroundJob.id == _as_uuid(job_id),
+                BackgroundJob.status == JobStatus.RUNNING.value,
+            )
+            .values(
+                status=JobStatus.PENDING.value,
+                updated_at=released_at,
+                lease_expires_at=None,
+                error_code=None,
+            )
+            .returning(BackgroundJob)
+        )
+        if model is None:
+            raise JobConflictError("job state conflict")
+        return _record(model)
+
     async def resolve_failure(
         self,
         job_id: uuid.UUID | str,

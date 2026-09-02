@@ -2,6 +2,7 @@
 import inspect
 import os
 import uuid
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from dotenv import load_dotenv
@@ -91,6 +92,13 @@ def test_recording_service_has_no_process_local_task_registry():
     assert not hasattr(service, "resume_pending")
     assert not hasattr(service, "schedule_recording")
     assert "create_task" not in inspect.getsource(service)
+
+
+def test_asr_poll_timed_out_uses_wall_clock():
+    started = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+    assert service.asr_poll_timed_out(started, now=started + timedelta(minutes=29)) is False
+    assert service.asr_poll_timed_out(started, now=started + timedelta(minutes=30)) is True
+    assert service.asr_poll_timed_out(None) is False
 
 
 class FakeTosStore:

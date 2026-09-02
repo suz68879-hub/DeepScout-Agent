@@ -114,12 +114,12 @@ async def test_asr_pending_requeues_without_worker_sleep(recording_task_runtime)
     with pytest.raises(RecordingTaskPending) as exc_info:
         await _execute(runtime, job, pending)
 
-    assert exc_info.value.countdown == 5
+    assert exc_info.value.countdown == 10
 
     async with runtime.session_scope() as session:
         persisted = await JobRepository(session).get_internal(job.id)
     assert persisted.status is JobStatus.PENDING
-    assert persisted.attempt == 1
+    assert persisted.attempt == 0
 
 
 async def test_transient_tos_or_asr_network_failure_requeues(recording_task_runtime):
@@ -140,25 +140,31 @@ async def test_transient_tos_or_asr_network_failure_requeues(recording_task_runt
     assert persisted.attempt == 1
 
 
-async def test_asr_timeout_fails_at_persisted_attempt_limit(recording_task_runtime):
+async def test_asr_timeout_fails_after_wall_clock_deadline(
+    recording_task_runtime, monkeypatch
+):
     runtime, owner_id, recording_id, tos_key = recording_task_runtime
     job = await _create_job(
-        runtime, owner_id, recording_id, tos_key, "timeout", max_attempts=1
+        runtime, owner_id, recording_id, tos_key, "timeout", max_attempts=5
+    )
+    monkeypatch.setattr(
+        "services.recording_service.ASR_POLL_DEADLINE", timedelta(0)
     )
 
     async def pending(_job):
         raise RecordingPollPending(str(recording_id))
 
-    with pytest.raises(RecordingTaskPending):
-        await _execute(runtime, job, pending)
     result = await _execute(runtime, job, pending)
 
     assert result["status"] == JobStatus.FAILED.value
-    assert result["error_code"] == JobErrorCode.MAX_ATTEMPTS_EXCEEDED.value
+    assert result["error_code"] == JobErrorCode.PROVIDER_ERROR.value
     async with runtime.session_scope() as session:
         recording = await session.get(Recording, recording_id)
     assert recording.status == "failed"
     assert recording.error == "transcription timed out"
+    async with runtime.session_scope() as session:
+        persisted = await JobRepository(session).get_internal(job.id)
+    assert persisted.attempt == 0
 
 
 async def test_worker_restart_resumes_requeued_recording(recording_task_runtime):

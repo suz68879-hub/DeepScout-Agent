@@ -202,6 +202,20 @@ async def test_requeue_increments_attempt_and_cancel_is_owner_scoped(job_runtime
     assert cancelled.status is JobStatus.CANCELLED
 
 
+async def test_release_returns_to_pending_without_consuming_attempt(job_runtime):
+    runtime, owner_id, _ = job_runtime
+    job = await _create_job(runtime, owner_id, idempotency_key="release-key")
+
+    async with runtime.session_scope() as session:
+        repository = JobRepository(session)
+        await repository.claim(job.id, lease_duration=timedelta(minutes=1))
+        released = await repository.release(job.id)
+
+    assert released.status is JobStatus.PENDING
+    assert released.attempt == 0
+    assert released.lease_expires_at is None
+
+
 async def test_concurrent_lease_scanners_requeue_once_and_fail_exhausted_job(job_runtime):
     runtime, owner_id, _ = job_runtime
     expired = await _create_job(runtime, owner_id, idempotency_key="expired-key")

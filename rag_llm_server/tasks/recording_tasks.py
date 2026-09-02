@@ -17,6 +17,7 @@ from services.asr_client import AsrError
 from services.jobs.handlers import JobType
 from services.jobs.repository import JobRepository
 from services.jobs.types import (
+    JobConflictError,
     JobErrorCode,
     JobRecord,
     JobStatus,
@@ -25,6 +26,8 @@ from services.recording_service import (
     RecordingModelOutputError,
     RecordingPollPending,
     RecordingStateError,
+    asr_poll_timed_out,
+    POLL_INTERVAL_SECONDS,
     process_recording as process_recording_step,
 )
 from services.storage import close_storage, init_storage
@@ -185,15 +188,19 @@ async def execute_recording_job(
         recording_id = str(uuid.UUID(claimed.payload_ref["recording_id"]))
         result_ref = _validate_result(await processor(claimed), recording_id)
     except RecordingPollPending as exc:
-        try:
+        if asr_poll_timed_out(claimed.started_at):
             return await _resolve_failure(
                 runtime,
                 claimed,
-                FailureClassification(JobErrorCode.PROVIDER_ERROR, True),
+                FailureClassification(JobErrorCode.PROVIDER_ERROR, False),
                 "transcription timed out",
             )
-        except RecordingTaskPending as pending:
-            raise pending from exc
+        try:
+            async with runtime.session_scope() as session:
+                await JobRepository(session).release(claimed.id)
+        except JobConflictError:
+            pass
+        raise RecordingTaskPending(str(claimed.id), POLL_INTERVAL_SECONDS) from exc
     except (httpx.RequestError, OSError) as exc:
         failure = (
             FailureClassification(JobErrorCode.NETWORK_ERROR, True)

@@ -55,9 +55,23 @@ async def test_judge_roles_falls_back_to_heuristic_on_llm_error():
     assert a.confidence == "低"
 
 
+async def test_judge_roles_falls_back_when_speaker_not_in_transcript():
+    llm = _FakeLlm([SpeakerAssignment(candidate_speaker="99", confidence="高", reason="幻觉编号")])
+    a = await judge_roles(TRANSCRIPT, llm=llm)
+    assert a.candidate_speaker == "1"
+    assert a.confidence == "低"
+
+
 async def test_fallback_assignment_picks_longest_speech():
     a = _fallback_assignment(TRANSCRIPT)
     assert a.candidate_speaker == "1"
+    assert a.confidence == "低"
+
+
+async def test_judge_roles_empty_transcript_falls_back_to_zero():
+    llm = _FakeLlm([SpeakerAssignment(candidate_speaker="1", confidence="高", reason="无句可对")])
+    a = await judge_roles([], llm=llm)
+    assert a.candidate_speaker == "0"
     assert a.confidence == "低"
 
 
