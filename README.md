@@ -41,7 +41,7 @@
 
 ## 快速开始
 
-前置要求：Node 20+、Python 3.13+、[uv](https://docs.astral.sh/uv/)。
+前置要求：Node 20+、Python 3.13+、Redis 7+、[uv](https://docs.astral.sh/uv/)。
 
 ### 1. 后端（端口 3001）
 
@@ -75,6 +75,7 @@ npm run dev
 | `ARK_INTERVIEWER_ENDPOINT_ID` 等 | 否 | 各 Agent 独立端点（interviewer/planner/evaluator/reporter/resume_parser/text2sql/recording_analyzer），未配置时回落 `ARK_ENDPOINT_ID` |
 | `ARK_EMBEDDING_ENDPOINT_ID` | 否 | 方舟 embedding 接入点 |
 | `EMBEDDING_API_BASE` / `EMBEDDING_API_KEY` / `EMBEDDING_MODEL` | 否 | 其他厂商 embedding（如阿里百炼 text-embedding-v4），未配置时回落方舟 |
+| `REDIS_URL` | 是 | Redis 7+ 连接串（登录限流、RTC 会话锁、幂等键）。开发与生产均必填，缺失时拒绝启动；不会回退进程内内存。生产使用 `rediss://` |
 | `SERVER_URL` | 使用 RTC 时是 | 公网可达的本服务地址；缺失时应用可启动，但 StartVoiceChat 返回 503 |
 | `CORS_ORIGINS` | 否 | 允许的浏览器来源，逗号分隔；默认仅允许本机 3000 端口 |
 | `ENABLE_DEBUG_ROUTES` | 否 | 默认 `false`；设为 `true` 后注册 `/debug/chat`、`/debug/rag` |
@@ -107,7 +108,7 @@ uv run pytest -q
 
 当前架构是“单进程、单 worker、SQLite 的多用户隔离”：用户通过用户名密码注册登录，服务端使用 7 天有效的 HttpOnly Cookie 会话；简历、面试、消息、报告、录音和 Analytics 均按用户过滤，每场面试使用独立 RTC Room/User/Task/Callback 标识。生产部署需保持前后端同站点范围、HTTPS 下开启 `AUTH_COOKIE_SECURE=true`，并固定 `uvicorn --workers 1`。
 
-开放注册不包含邮箱验证、找回密码、账号删除或管理员后台。限流、RTC 会话锁、报告冷任务都在进程内，SQLite 也只适合当前单实例规模；因此不支持多进程或多副本部署。扩容到多实例前需将会话/限流/锁和任务迁移到共享基础设施。
+开放注册不包含邮箱验证、找回密码、账号删除或管理员后台。登录限流、RTC 会话锁和写请求幂等依赖 Redis，故障时 fail closed（503），不会退回进程内字典。SQLite 只适合当前单实例开发规模。生产部署需保持前后端同站点范围、HTTPS 下开启 `AUTH_COOKIE_SECURE=true`，并使用 PostgreSQL、Redis 与任务队列。
 
 旧数据库首次升级时，如存在无 `user_id` 的历史数据，必须设置 `BOOTSTRAP_ADMIN_USERNAME` 和 `BOOTSTRAP_ADMIN_PASSWORD`。迁移会在事务内把全部历史数据归属该管理员；缺少配置、归属为空或关联审计失败时应用拒绝启动。新上传对象使用 `users/{user_id}/...`，历史对象 key 不搬迁。
 

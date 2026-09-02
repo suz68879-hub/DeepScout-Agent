@@ -83,13 +83,12 @@ def data_unavailable() -> SharedStateUnavailable:
     return SharedStateUnavailable(kind=RedisFailureKind.DATA)
 
 
-async def init_redis(config: Config = settings) -> Redis | None:
+async def init_redis(config: Config = settings) -> Redis:
     """创建单个共享 client（由其内部连接池服务全部请求）并执行 PING。"""
     global _client
     await close_redis()
     if not config.REDIS_URL:
-        _readiness.disable()
-        return None
+        raise ValueError("REDIS_URL is required")
 
     client = Redis.from_url(
         config.REDIS_URL,
@@ -127,9 +126,9 @@ async def ping_redis() -> bool:
 
 
 async def check_redis_readiness() -> bool:
-    """三次连续失败摘流，两次连续成功后自动恢复。"""
+    """三次连续失败摘流，两次连续成功后自动恢复。未初始化视为未就绪。"""
     if not _readiness.enabled:
-        return True
+        return False
     try:
         await ping_redis()
     except SharedStateUnavailable:
