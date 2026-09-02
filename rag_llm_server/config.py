@@ -293,8 +293,8 @@ class Config:
                 self.APP_ENV,
             )
 
-        if self.APP_ENV == "production" and not self.REDIS_URL:
-            raise ValueError("REDIS_URL is required in production")
+        if self.APP_ENV != "test" and not self.REDIS_URL:
+            raise ValueError("REDIS_URL is required")
         self._redis_log_target = None
         self.REDIS_TLS = False
         if self.REDIS_URL:

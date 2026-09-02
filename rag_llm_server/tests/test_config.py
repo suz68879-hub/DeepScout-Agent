@@ -89,6 +89,7 @@ def _clear_redis_env(monkeypatch):
 def test_database_config_defaults_to_sqlite(monkeypatch):
     _clear_database_env(monkeypatch)
     monkeypatch.setenv("DATABASE_PATH", "data/test.db")
+    monkeypatch.setenv("REDIS_URL", "redis://cache.internal/0")
 
     config = Config()
 
@@ -128,6 +129,7 @@ def test_postgres_config_parses_pool_and_hides_credentials(monkeypatch):
     monkeypatch.setenv("DATABASE_POOL_TIMEOUT", "12")
     monkeypatch.setenv("DATABASE_POOL_RECYCLE", "900")
     monkeypatch.setenv("DATABASE_PATH", "must-not-be-read.db")
+    monkeypatch.setenv("REDIS_URL", "redis://cache.internal/0")
 
     config = Config()
 
@@ -207,9 +209,10 @@ def test_config_rejects_invalid_postgres_dsn_without_leaking_secret(monkeypatch,
     assert "do-not-leak" not in str(exc_info.value)
 
 
-def test_redis_config_defaults_to_disabled_outside_production(monkeypatch):
+def test_test_env_allows_missing_redis_url(monkeypatch):
     _clear_database_env(monkeypatch)
     _clear_redis_env(monkeypatch)
+    monkeypatch.setenv("APP_ENV", "test")
 
     config = Config()
 
@@ -219,6 +222,22 @@ def test_redis_config_defaults_to_disabled_outside_production(monkeypatch):
     assert config.REDIS_CONNECT_TIMEOUT == 2.0
     assert config.REDIS_TLS is False
     assert config.redis_log_target() is None
+
+
+@pytest.mark.parametrize("app_env", ["development", "production"])
+def test_runtime_environments_require_redis_url(monkeypatch, app_env):
+    _clear_database_env(monkeypatch)
+    _clear_redis_env(monkeypatch)
+    monkeypatch.setenv("APP_ENV", app_env)
+    if app_env == "production":
+        monkeypatch.setenv("STORAGE_BACKEND", "postgres")
+        monkeypatch.setenv(
+            "DATABASE_URL",
+            "postgresql+psycopg://deepscout_app:safe-secret@db.internal/deepscout",
+        )
+
+    with pytest.raises(ValueError, match="REDIS_URL is required"):
+        Config()
 
 
 def test_redis_config_parses_tls_url_and_hides_credentials(monkeypatch):
@@ -273,23 +292,10 @@ def test_redis_pool_parameters_fail_fast(monkeypatch, key, value):
         Config()
 
 
-def test_production_requires_redis_url(monkeypatch):
-    _clear_database_env(monkeypatch)
-    _clear_redis_env(monkeypatch)
-    monkeypatch.setenv("APP_ENV", "production")
-    monkeypatch.setenv("STORAGE_BACKEND", "postgres")
-    monkeypatch.setenv(
-        "DATABASE_URL",
-        "postgresql+psycopg://deepscout_app:safe-secret@db.internal/deepscout",
-    )
-
-    with pytest.raises(ValueError, match="REDIS_URL is required"):
-        Config()
-
-
 def test_session_cache_flag_is_opt_in_and_requires_redis(monkeypatch):
     _clear_database_env(monkeypatch)
     _clear_redis_env(monkeypatch)
+    monkeypatch.setenv("APP_ENV", "test")
     assert Config().AUTH_SESSION_CACHE_ENABLED is False
 
     monkeypatch.setenv("REDIS_URL", "redis://cache.internal/0")
@@ -301,6 +307,7 @@ def test_session_cache_flag_is_opt_in_and_requires_redis(monkeypatch):
 def test_session_cache_cannot_be_enabled_without_redis(monkeypatch):
     _clear_database_env(monkeypatch)
     _clear_redis_env(monkeypatch)
+    monkeypatch.setenv("APP_ENV", "test")
     monkeypatch.setenv("AUTH_SESSION_CACHE_ENABLED", "true")
 
     with pytest.raises(ValueError, match="AUTH_SESSION_CACHE_ENABLED requires REDIS_URL"):

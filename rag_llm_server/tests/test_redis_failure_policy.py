@@ -90,9 +90,10 @@ async def test_readiness_fails_after_three_failures_and_recovers_after_two_succe
     await redis_client.close_redis()
 
 
-async def test_disabled_optional_redis_does_not_make_development_unready():
+async def test_missing_redis_url_fails_init_and_is_not_ready():
     config = redis_config()
     config.REDIS_URL = None
 
-    assert await redis_client.init_redis(config) is None
-    assert await redis_client.check_redis_readiness() is True
+    with pytest.raises(ValueError, match="REDIS_URL is required"):
+        await redis_client.init_redis(config)
+    assert await redis_client.check_redis_readiness() is False

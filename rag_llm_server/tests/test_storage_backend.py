@@ -18,6 +18,7 @@ def test_development_defaults_to_sqlite(monkeypatch):
     monkeypatch.setenv("APP_ENV", "development")
     monkeypatch.delenv("STORAGE_BACKEND", raising=False)
     monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.setenv("REDIS_URL", "redis://cache.internal/0")
 
     assert isinstance(build_storage(Config()), SqliteStorage)
 

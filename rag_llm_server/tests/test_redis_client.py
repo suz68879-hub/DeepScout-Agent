@@ -87,10 +87,12 @@ async def test_ping_redis_maps_runtime_connection_error(monkeypatch):
 
 
 async def test_disabled_redis_has_no_local_fallback():
-    assert await redis_client.init_redis(redis_config(url=None)) is None
+    with pytest.raises(ValueError, match="REDIS_URL is required"):
+        await redis_client.init_redis(redis_config(url=None))
 
     with pytest.raises(redis_client.SharedStateUnavailable):
         redis_client.get_redis()
+    assert await redis_client.check_redis_readiness() is False
 
 
 async def test_live_redis_ping_version_and_pool_release():

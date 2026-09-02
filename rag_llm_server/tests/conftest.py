@@ -8,6 +8,8 @@ from pathlib import Path
 os.environ["LANGCHAIN_TRACING_V2"] = "false"
 os.environ["LANGSMITH_TRACING"] = "false"
 os.environ.setdefault("RTC_CALLBACK_SECRET", "test-callback-secret")
+# 单元测试允许缺 REDIS_URL；开发/生产启动仍必填。须在 import config 之前设置。
+os.environ["APP_ENV"] = "test"
 
 # 让 pytest 能 import config / services / agents / api / mcp / rag（rag_llm_server 为包根）
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
